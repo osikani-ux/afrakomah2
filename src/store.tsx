@@ -2,6 +2,11 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from "react";
 import { seedDB, nowISO, todayISO } from "./data";
 import type { DB, InvoiceItem, Notif, Role, Staff, ViewId } from "./data";
+import {
+  isSupabaseConfigured, fetchCloud, cloudHasData, pushTables, pushAll,
+  changedTables, deletedIds, purgeDeleted, TABLES,
+} from "./supabase";
+import type { TableSpec } from "./supabase";
 
 export interface Nav {
   view: ViewId;
@@ -13,6 +18,14 @@ export interface ToastMsg {
   id: number;
   text: string;
   tone: "ok" | "warn" | "danger" | "info";
+}
+
+export interface SyncState {
+  mode: "cloud" | "local";
+  syncing: boolean;
+  pending: number;
+  lastSyncAt: string | null;
+  error: string | null;
 }
 
 interface MutateOpts {
@@ -31,6 +44,10 @@ interface StoreShape {
   dismissToast: (id: number) => void;
   nav: Nav;
   go: (view: ViewId, params?: Partial<Omit<Nav, "view">>) => void;
+  booting: boolean;
+  sync: SyncState;
+  pullNow: () => Promise<void>;
+  seedCloud: () => Promise<void>;
 }
 
 const Ctx = createContext<StoreShape>(null!);
@@ -62,6 +79,25 @@ function loadUser(): Staff | null {
   return null;
 }
 
+/** Cloud rows win; empty cloud tables fall back to the local snapshot. */
+function mergeCloud(local: DB, cloud: Partial<DB>): DB {
+  const out: DB = structuredClone(local);
+  (Object.keys(cloud) as (keyof DB)[]).forEach((k) => {
+    const val = cloud[k];
+    if (val === undefined || val === null) return;
+    const empty = Array.isArray(val) ? val.length === 0 : Object.keys(val as object).length === 0;
+    if (!empty) (out as unknown as Record<string, unknown>)[k] = val;
+  });
+  return out;
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) => window.setTimeout(() => rej(new Error("Connection timed out")), ms)),
+  ]);
+}
+
 let toastSeq = 1;
 let auditSeq = 100;
 let notifSeq = 100;
@@ -71,9 +107,56 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Staff | null>(loadUser);
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
   const [nav, setNav] = useState<Nav>({ view: "dashboard" });
+  const [booting, setBooting] = useState(isSupabaseConfigured);
+  const [sync, setSync] = useState<SyncState>({
+    mode: isSupabaseConfigured ? "cloud" : "local",
+    syncing: false, pending: 0, lastSyncAt: null, error: null,
+  });
+
+  const dbRef = useRef(db);
   const userRef = useRef(user);
   userRef.current = user;
 
+  const syncTimer = useRef<number | null>(null);
+  const pendingKeys = useRef<Set<keyof DB>>(new Set());
+  const pendingDeletes = useRef<Map<string, Set<string>>>(new Map());
+
+  /* ---------- boot: hydrate from Supabase when configured ---------- */
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setBooting(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const local = loadDB();
+      try {
+        const has = await withTimeout(cloudHasData(), 8000);
+        if (!has) {
+          // Fresh project — push this device's dataset so every
+          // workstation starts from the same live database.
+          await withTimeout(pushAll(local), 20000);
+          if (cancelled) return;
+          setDb(local);
+        } else {
+          const cloud = await withTimeout(fetchCloud(), 15000);
+          if (cancelled) return;
+          if (cloud) setDb(mergeCloud(local, cloud));
+        }
+        setSync({ mode: "cloud", syncing: false, pending: 0, lastSyncAt: nowISO(), error: null });
+      } catch (e) {
+        if (cancelled) return;
+        setSync({ mode: "cloud", syncing: false, pending: 0, lastSyncAt: null, error: (e as Error).message });
+      } finally {
+        if (!cancelled) setBooting(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /* ---------- local cache (offline fallback in every mode) ---------- */
   useEffect(() => {
     try {
       localStorage.setItem(DB_KEY, JSON.stringify(db));
@@ -96,12 +179,48 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setToasts((t) => [...t.slice(-3), { id, text, tone }]);
     window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200);
   }, []);
-
   const dismissToast = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
 
-  const mutate = useCallback((fn: (d: DB) => void, opts?: MutateOpts) => {
-    const u = userRef.current;
-    setDb((prev) => {
+  /* ---------- debounced cloud push ---------- */
+  const schedulePush = useCallback((changed: (keyof DB)[], prev: DB, next: DB) => {
+    if (!isSupabaseConfigured) return;
+    changed.forEach((k) => pendingKeys.current.add(k));
+    // collect deleted primary keys for keyed tables
+    changed.forEach((k) => {
+      const spec = TABLES.find((t) => t.key === k);
+      if (!spec || spec.fullReplace) return;
+      const ids = deletedIds(prev, next, spec as TableSpec);
+      if (ids.length) {
+        const set = pendingDeletes.current.get(spec.table) ?? new Set<string>();
+        ids.forEach((id) => set.add(id));
+        pendingDeletes.current.set(spec.table, set);
+      }
+    });
+    setSync((s) => ({ ...s, syncing: true, pending: pendingKeys.current.size }));
+    if (syncTimer.current) window.clearTimeout(syncTimer.current);
+    syncTimer.current = window.setTimeout(async () => {
+      const keys = [...pendingKeys.current];
+      pendingKeys.current.clear();
+      const snapshot = dbRef.current;
+      const dels = [...pendingDeletes.current.entries()];
+      pendingDeletes.current.clear();
+      try {
+        for (const [table, ids] of dels) {
+          const spec = TABLES.find((t) => t.table === table);
+          if (spec) await purgeDeleted(spec, [...ids]);
+        }
+        await pushTables(snapshot, keys);
+        setSync((s) => ({ ...s, syncing: false, error: null, lastSyncAt: nowISO(), pending: pendingKeys.current.size }));
+      } catch (e) {
+        setSync((s) => ({ ...s, syncing: false, error: (e as Error).message, pending: 0 }));
+      }
+    }, 650);
+  }, []);
+
+  const mutate = useCallback(
+    (fn: (d: DB) => void, opts?: MutateOpts) => {
+      const u = userRef.current;
+      const prev = dbRef.current;
       const next = structuredClone(prev);
       fn(next);
       if (opts?.audit && u) {
@@ -115,13 +234,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         });
         next.notifications = next.notifications.slice(0, 60);
       }
-      return next;
-    });
-  }, []);
+      dbRef.current = next;
+      setDb(next);
+      const changed = changedTables(prev, next);
+      if (changed.length) schedulePush(changed, prev, next);
+    },
+    [schedulePush]
+  );
 
   const login = useCallback(
     (staffId: string) => {
-      const s = db.staff.find((x) => x.id === staffId);
+      const s = dbRef.current.staff.find((x) => x.id === staffId);
       if (!s) return;
       setUser(s);
       const home: Record<Role, ViewId> = {
@@ -131,7 +254,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setNav({ view: home[s.role] });
       toast(`Signed in as ${s.name} — ${s.dept}`, "ok");
     },
-    [db.staff, toast]
+    [toast]
   );
 
   const logout = useCallback(() => {
@@ -144,9 +267,48 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     window.scrollTo({ top: 0 });
   }, []);
 
+  /* ---------- manual cloud operations (Settings) ---------- */
+  const pullNow = useCallback(async () => {
+    if (!isSupabaseConfigured) {
+      toast("Supabase is not configured — running on this device's data", "info");
+      return;
+    }
+    setSync((s) => ({ ...s, syncing: true, error: null }));
+    try {
+      const cloud = await withTimeout(fetchCloud(), 15000);
+      if (cloud) {
+        const merged = mergeCloud(dbRef.current, cloud);
+        dbRef.current = merged;
+        setDb(merged);
+      }
+      setSync((s) => ({ ...s, syncing: false, lastSyncAt: nowISO() }));
+      toast("Pulled latest records from Supabase", "ok");
+    } catch (e) {
+      setSync((s) => ({ ...s, syncing: false, error: (e as Error).message }));
+      toast(`Pull failed — ${(e as Error).message}`, "danger");
+    }
+  }, [toast]);
+
+  const seedCloud = useCallback(async () => {
+    if (!isSupabaseConfigured) {
+      toast("Supabase is not configured — add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env", "warn");
+      return;
+    }
+    setSync((s) => ({ ...s, syncing: true, error: null }));
+    try {
+      await withTimeout(pushAll(dbRef.current), 25000);
+      setSync((s) => ({ ...s, syncing: false, lastSyncAt: nowISO() }));
+      toast("Cloud database seeded — all tables pushed to Supabase", "ok");
+      mutate(() => {}, { audit: "Seeded Supabase cloud database from this device" });
+    } catch (e) {
+      setSync((s) => ({ ...s, syncing: false, error: (e as Error).message }));
+      toast(`Seed failed — ${(e as Error).message}`, "danger");
+    }
+  }, [toast, mutate]);
+
   const value = useMemo(
-    () => ({ db, user, login, logout, mutate, toast, toasts, dismissToast, nav, go }),
-    [db, user, login, logout, mutate, toast, toasts, dismissToast, nav, go]
+    () => ({ db, user, login, logout, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud }),
+    [db, user, login, logout, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

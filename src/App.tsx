@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { StoreProvider, useStore } from "./store";
 import type { Nav } from "./store";
+import { isSupabaseConfigured, maskedUrl, supabaseUrl } from "./supabase";
 import { ROLE_META, timeAgo } from "./data";
 import type { Role, ViewId } from "./data";
 import { Avatar, Badge, Btn, EcgStrip } from "./ui";
@@ -64,12 +65,31 @@ export default function App() {
 }
 
 function Root() {
-  const { user } = useStore();
+  const { user, booting } = useStore();
   return (
     <>
-      {user ? <Shell /> : <Login />}
+      {booting ? <BootSplash /> : user ? <Shell /> : <Login />}
       <ToastHost />
     </>
+  );
+}
+
+function BootSplash() {
+  return (
+    <div className="bg-clinical flex min-h-screen flex-col items-center justify-center">
+      <div className="relative w-[min(560px,90vw)] rounded-2xl border border-line bg-pine-950 p-8 text-center shadow-2xl">
+        <div className="bg-pine-grid absolute inset-0 rounded-2xl" />
+        <div className="relative">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-mint/15 text-mint"><IPulse size={32} /></span>
+          <p className="mt-4 font-display text-xl font-extrabold text-white">MediCore HMS</p>
+          <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.22em] text-mint/80">Connecting to hospital database</p>
+          <div className="mt-5"><EcgStrip className="h-12 w-full" /></div>
+          <p className="mt-4 font-mono text-[10.5px] text-white/50">
+            {isSupabaseConfigured ? <>Supabase · {maskedUrl(supabaseUrl)} · hydrating 18 tables…</> : "Local mode · loading records…"}
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -137,6 +157,17 @@ function Login() {
           <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-med-600">Staff workstation sign-in</p>
           <h2 className="mt-1 font-display text-2xl font-extrabold text-ink">Who is on duty?</h2>
           <p className="mt-1 text-xs text-ink-faint">Pick your role — the system opens with exactly the modules you are authorised to use.</p>
+          <div className="mt-2">
+            {isSupabaseConfigured ? (
+              <span className="inline-flex items-center gap-2 rounded-lg border border-med-200 bg-med-50 px-2.5 py-1.5 text-[10.5px] font-bold text-med-800">
+                <span className="live-dot h-1.5 w-1.5 rounded-full bg-med-600" /> Supabase connected · {maskedUrl(supabaseUrl)}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-1.5 text-[10.5px] font-bold text-ink-soft">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Local demo mode — add Supabase keys in .env to go live
+              </span>
+            )}
+          </div>
 
           <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {(Object.keys(ROLE_META) as Role[]).map((r) => (
@@ -184,7 +215,7 @@ function Login() {
 /* ---------------- shell ---------------- */
 
 function Shell() {
-  const { user, nav, go, logout } = useStore();
+  const { user, nav, go, logout, sync } = useStore();
   const allowed = ACCESS[user?.role ?? "reception"];
   const view: ViewId = allowed.includes(nav.view) ? nav.view : "dashboard";
   const View = VIEWS[view];
@@ -231,6 +262,15 @@ function Shell() {
           })}
         </nav>
         <div className="border-t border-white/10 p-3">
+          <div className="mb-2 flex items-center justify-between rounded-lg bg-pine-900/70 px-2.5 py-1.5">
+            <span className="flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-wider text-white/60">
+              <span className={`h-1.5 w-1.5 rounded-full ${sync.mode === "cloud" ? (sync.error ? "bg-amber-400" : "live-dot bg-mint") : "bg-amber-400"}`} />
+              {sync.mode === "cloud" ? "Supabase" : "Local"}
+            </span>
+            <span className="font-mono text-[9px] text-white/45">
+              {sync.syncing ? "syncing…" : sync.error ? "offline" : sync.lastSyncAt ? timeAgo(sync.lastSyncAt) : "—"}
+            </span>
+          </div>
           <div className="flex items-center gap-2.5 rounded-xl bg-pine-900 p-2.5">
             <Avatar name={user?.name ?? "?"} size={32} />
             <div className="min-w-0 flex-1">
