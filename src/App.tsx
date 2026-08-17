@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { StoreProvider, useStore } from "./store";
 import type { Nav } from "./store";
-import { isSupabaseConfigured, maskedUrl, supabaseUrl } from "./supabase";
+import { hasConfig, maskedUrl, configuredUrl } from "./supabase";
 import { ROLE_META, timeAgo } from "./data";
 import type { Role, ViewId } from "./data";
 import { Avatar, Badge, Btn, EcgStrip } from "./ui";
@@ -85,7 +85,7 @@ function BootSplash() {
           <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.22em] text-mint/80">Connecting to hospital database</p>
           <div className="mt-5"><EcgStrip className="h-12 w-full" /></div>
           <p className="mt-4 font-mono text-[10.5px] text-white/50">
-            {isSupabaseConfigured ? <>Supabase · {maskedUrl(supabaseUrl)} · hydrating 18 tables…</> : "Local mode · loading records…"}
+            {hasConfig() ? <>Supabase · {maskedUrl(configuredUrl())} · hydrating 18 tables…</> : "Local mode · loading records…"}
           </p>
         </div>
       </div>
@@ -158,13 +158,13 @@ function Login() {
           <h2 className="mt-1 font-display text-2xl font-extrabold text-ink">Who is on duty?</h2>
           <p className="mt-1 text-xs text-ink-faint">Pick your role — the system opens with exactly the modules you are authorised to use.</p>
           <div className="mt-2">
-            {isSupabaseConfigured ? (
+            {hasConfig() ? (
               <span className="inline-flex items-center gap-2 rounded-lg border border-med-200 bg-med-50 px-2.5 py-1.5 text-[10.5px] font-bold text-med-800">
-                <span className="live-dot h-1.5 w-1.5 rounded-full bg-med-600" /> Supabase connected · {maskedUrl(supabaseUrl)}
+                <span className="live-dot h-1.5 w-1.5 rounded-full bg-med-600" /> Supabase connected · {maskedUrl(configuredUrl())}
               </span>
             ) : (
               <span className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-1.5 text-[10.5px] font-bold text-ink-soft">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Local demo mode — add Supabase keys in .env to go live
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Local demo mode — connect your Supabase project in Settings → Database
               </span>
             )}
           </div>

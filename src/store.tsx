@@ -3,10 +3,11 @@ import type { ReactNode } from "react";
 import { seedDB, nowISO, todayISO } from "./data";
 import type { DB, InvoiceItem, Notif, Role, Staff, ViewId } from "./data";
 import {
-  isSupabaseConfigured, fetchCloud, cloudHasData, pushTables, pushAll,
+  hasConfig, fetchCloud, cloudHasData, pushTables, pushAll,
   changedTables, deletedIds, purgeDeleted, TABLES,
+  saveSbConfig, clearSbConfig, testConnection,
 } from "./supabase";
-import type { TableSpec } from "./supabase";
+import type { TableSpec, ConnTest } from "./supabase";
 
 export interface Nav {
   view: ViewId;
@@ -48,6 +49,8 @@ interface StoreShape {
   sync: SyncState;
   pullNow: () => Promise<void>;
   seedCloud: () => Promise<void>;
+  connect: (url: string, key: string) => Promise<ConnTest>;
+  disconnect: () => void;
 }
 
 const Ctx = createContext<StoreShape>(null!);
@@ -107,9 +110,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Staff | null>(loadUser);
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
   const [nav, setNav] = useState<Nav>({ view: "dashboard" });
-  const [booting, setBooting] = useState(isSupabaseConfigured);
+  const [booting, setBooting] = useState(() => hasConfig());
   const [sync, setSync] = useState<SyncState>({
-    mode: isSupabaseConfigured ? "cloud" : "local",
+    mode: hasConfig() ? "cloud" : "local",
     syncing: false, pending: 0, lastSyncAt: null, error: null,
   });
 
@@ -123,7 +126,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   /* ---------- boot: hydrate from Supabase when configured ---------- */
   useEffect(() => {
-    if (!isSupabaseConfigured) {
+    if (!hasConfig()) {
       setBooting(false);
       return;
     }
@@ -183,7 +186,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   /* ---------- debounced cloud push ---------- */
   const schedulePush = useCallback((changed: (keyof DB)[], prev: DB, next: DB) => {
-    if (!isSupabaseConfigured) return;
+    if (!hasConfig()) return;
     changed.forEach((k) => pendingKeys.current.add(k));
     // collect deleted primary keys for keyed tables
     changed.forEach((k) => {
@@ -269,8 +272,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   /* ---------- manual cloud operations (Settings) ---------- */
   const pullNow = useCallback(async () => {
-    if (!isSupabaseConfigured) {
-      toast("Supabase is not configured — running on this device's data", "info");
+    if (!hasConfig()) {
+      toast("No Supabase connection — paste your project URL in Settings → Database", "info");
       return;
     }
     setSync((s) => ({ ...s, syncing: true, error: null }));
@@ -290,8 +293,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [toast]);
 
   const seedCloud = useCallback(async () => {
-    if (!isSupabaseConfigured) {
-      toast("Supabase is not configured — add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env", "warn");
+    if (!hasConfig()) {
+      toast("No Supabase connection — paste your project URL in Settings → Database", "warn");
       return;
     }
     setSync((s) => ({ ...s, syncing: true, error: null }));
@@ -306,9 +309,53 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [toast, mutate]);
 
+  /* ---------- runtime connection (Settings → Database) ---------- */
+  const connect = useCallback(
+    async (url: string, key: string): Promise<ConnTest> => {
+      let res: ConnTest;
+      try {
+        res = await withTimeout(testConnection(url, key), 9000);
+      } catch (e) {
+        res = { ok: false, empty: false, error: (e as Error).message, hint: "The project URL could not be reached." };
+      }
+      if (!res.ok) return res;
+      saveSbConfig(url, key);
+      setSync({ mode: "cloud", syncing: true, pending: 0, lastSyncAt: null, error: null });
+      try {
+        const local = dbRef.current;
+        if (res.empty) {
+          await withTimeout(pushAll(local), 25000);
+          toast("Connected — this device's dataset seeded the fresh project", "ok");
+          mutate(() => {}, { audit: "Connected Supabase project and seeded cloud database" });
+        } else {
+          const cloud = await withTimeout(fetchCloud(), 15000);
+          if (cloud) {
+            const merged = mergeCloud(local, cloud);
+            dbRef.current = merged;
+            setDb(merged);
+          }
+          toast("Connected — live records merged from Supabase", "ok");
+          mutate(() => {}, { audit: "Connected Supabase project (cloud-first merge)" });
+        }
+        setSync({ mode: "cloud", syncing: false, pending: 0, lastSyncAt: nowISO(), error: null });
+      } catch (e) {
+        setSync((s) => ({ ...s, syncing: false, error: (e as Error).message }));
+        toast(`Connected, but first sync failed — ${(e as Error).message}`, "warn");
+      }
+      return res;
+    },
+    [toast, mutate]
+  );
+
+  const disconnect = useCallback(() => {
+    clearSbConfig();
+    setSync({ mode: "local", syncing: false, pending: 0, lastSyncAt: null, error: null });
+    toast("Disconnected — running on this device's data", "info");
+  }, [toast]);
+
   const value = useMemo(
-    () => ({ db, user, login, logout, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud }),
-    [db, user, login, logout, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud]
+    () => ({ db, user, login, logout, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud, connect, disconnect }),
+    [db, user, login, logout, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud, connect, disconnect]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

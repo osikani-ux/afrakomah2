@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../store";
-import { isSupabaseConfigured, maskedUrl, supabaseUrl, TABLES } from "../supabase";
+import { hasConfig, maskedUrl, configuredUrl, configuredKey, BUILTIN_KEY, TABLES } from "../supabase";
 import { timeAgo, fmtDate, fmtTime, todayISO, ROLE_META } from "../data";
 import type { Notif } from "../data";
 import { Badge, Btn, Card, SectionHead, SearchBox, Tabs, Empty, downloadJSON } from "../ui";
@@ -70,10 +70,30 @@ export function NotificationsView() {
 }
 
 export function SettingsView() {
-  const { db, user, mutate, toast, sync, pullNow, seedCloud } = useStore();
+  const { db, user, mutate, toast, sync, pullNow, seedCloud, connect, disconnect } = useStore();
   const [auditQ, setAuditQ] = useState("");
   const [confirmReset, setConfirmReset] = useState(false);
   const [sessionMin, setSessionMin] = useState("30");
+  const [urlVal, setUrlVal] = useState(configuredUrl());
+  const [keyVal, setKeyVal] = useState(configuredKey());
+  const [connecting, setConnecting] = useState(false);
+  const [connErr, setConnErr] = useState<{ error: string; hint?: string } | null>(null);
+
+  const doConnect = async () => {
+    if (!urlVal.trim()) {
+      setConnErr({ error: "Enter your Supabase project URL", hint: "Find it under Supabase → Project Settings → API." });
+      return;
+    }
+    setConnecting(true);
+    setConnErr(null);
+    const res = await connect(urlVal, keyVal);
+    setConnecting(false);
+    if (!res.ok) setConnErr({ error: res.error ?? "Connection failed", hint: res.hint });
+    else {
+      setUrlVal(configuredUrl());
+      setKeyVal(configuredKey());
+    }
+  };
 
   const audit = useMemo(
     () => db.audit.filter((a) => !auditQ.trim() || (a.user + a.action).toLowerCase().includes(auditQ.toLowerCase())),
@@ -105,7 +125,7 @@ export function SettingsView() {
           <div className="p-4">
             <SectionHead
               title="Database Connection"
-              sub={isSupabaseConfigured ? "PostgreSQL via Supabase — every change syncs automatically" : "No Supabase keys found — the system is running on this device"}
+              sub={hasConfig() ? "PostgreSQL via Supabase — every change syncs automatically" : "Publishable key detected — paste your project URL to go live"}
               right={
                 sync.mode === "cloud" ? (
                   sync.error ? <Badge tone="warn"><IAlert size={10} /> Reaching local cache</Badge> : <Badge tone="ok"><span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-500" /> Live sync</Badge>
@@ -114,46 +134,98 @@ export function SettingsView() {
                 )
               }
             />
-            <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-              <div className="rounded-lg bg-paper/70 p-2.5">
-                <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Endpoint</p>
-                <p className="mt-0.5 truncate font-mono text-[11px] font-bold text-ink">{isSupabaseConfigured ? maskedUrl(supabaseUrl) : "browser storage"}</p>
+
+            {hasConfig() ? (
+              <>
+                <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                  <div className="rounded-lg bg-paper/70 p-2.5">
+                    <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Endpoint</p>
+                    <p className="mt-0.5 truncate font-mono text-[11px] font-bold text-ink" title={configuredUrl()}>{maskedUrl(configuredUrl())}</p>
+                  </div>
+                  <div className="rounded-lg bg-paper/70 p-2.5">
+                    <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Tables</p>
+                    <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">{TABLES.length + 1} mapped</p>
+                  </div>
+                  <div className="rounded-lg bg-paper/70 p-2.5">
+                    <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Last sync</p>
+                    <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">{sync.syncing ? "syncing…" : sync.lastSyncAt ? timeAgo(sync.lastSyncAt) : "never"}</p>
+                  </div>
+                  <div className="rounded-lg bg-paper/70 p-2.5">
+                    <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Records</p>
+                    <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">{(db.patients.length + db.appointments.length + db.labOrders.length + db.invoices.length + db.audit.length).toLocaleString()} rows</p>
+                  </div>
+                </div>
+                {sync.error && (
+                  <p className="mt-2.5 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-900">
+                    <IAlert size={13} className="mt-0.5 shrink-0" />
+                    <span>Cloud unreachable — “{sync.error}”. Work continues on the local cache and syncs will retry on the next change.</span>
+                  </p>
+                )}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Btn onClick={() => void pullNow()} disabled={sync.syncing}><IRefresh size={13} /> Pull latest from cloud</Btn>
+                  <Btn variant="outline" onClick={() => void seedCloud()} disabled={sync.syncing}><IDownload size={13} /> Seed cloud from this device</Btn>
+                  <Btn variant="ghost" onClick={backup}><IDownload size={13} /> JSON backup</Btn>
+                  <Btn variant="ghost" className="text-alert hover:bg-red-50" onClick={() => { disconnect(); setUrlVal(""); }}><IAlert size={12} /> Disconnect</Btn>
+                </div>
+              </>
+            ) : (
+              <div className="space-y-2.5">
+                <label className="block">
+                  <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wide text-ink-faint">Project URL</span>
+                  <input
+                    value={urlVal}
+                    onChange={(e) => { setUrlVal(e.target.value); setConnErr(null); }}
+                    placeholder="https://abcdefgh.supabase.co"
+                    className="w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs outline-none transition-colors placeholder:text-ink-faint/60 focus:border-med-500 focus:ring-2 focus:ring-med-500/15"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-wide text-ink-faint">
+                    Publishable key <span className="font-mono text-[9px] normal-case tracking-normal text-med-600">pre-filled · leave as-is</span>
+                  </span>
+                  <input
+                    value={keyVal}
+                    onChange={(e) => setKeyVal(e.target.value)}
+                    placeholder={BUILTIN_KEY}
+                    className="w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs outline-none transition-colors placeholder:text-ink-faint/60 focus:border-med-500 focus:ring-2 focus:ring-med-500/15"
+                  />
+                </label>
+                {connErr && (
+                  <p className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-semibold text-red-800">
+                    <IAlert size={13} className="mt-0.5 shrink-0" />
+                    <span>{connErr.error}{connErr.hint ? <span className="block font-medium text-red-700/80">{connErr.hint}</span> : null}</span>
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <Btn size="md" onClick={() => void doConnect()} disabled={connecting}>
+                    {connecting ? (
+                      <span className="flex items-center gap-2"><IRefresh size={13} className="animate-spin" /> Testing connection…</span>
+                    ) : (
+                      <span className="flex items-center gap-2"><ICheck size={14} /> Connect & test</span>
+                    )}
+                  </Btn>
+                  <Btn variant="ghost" onClick={backup}><IDownload size={13} /> JSON backup</Btn>
+                </div>
+                <p className="text-[10.5px] leading-snug text-ink-faint">
+                  Connecting verifies the schema, then seeds a fresh project from this device — or merges existing cloud records. You can also set <span className="font-mono">VITE_SUPABASE_URL</span> in <span className="font-mono">.env</span>.
+                </p>
               </div>
-              <div className="rounded-lg bg-paper/70 p-2.5">
-                <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Tables</p>
-                <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">{TABLES.length + 1} mapped</p>
-              </div>
-              <div className="rounded-lg bg-paper/70 p-2.5">
-                <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Last sync</p>
-                <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">{sync.syncing ? "syncing…" : sync.lastSyncAt ? timeAgo(sync.lastSyncAt) : "never"}</p>
-              </div>
-              <div className="rounded-lg bg-paper/70 p-2.5">
-                <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Records</p>
-                <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">{(db.patients.length + db.appointments.length + db.labOrders.length + db.invoices.length + db.audit.length).toLocaleString()} rows</p>
-              </div>
-            </div>
-            {sync.error && (
-              <p className="mt-2.5 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-900">
-                <IAlert size={13} className="mt-0.5 shrink-0" />
-                <span>Cloud unreachable — “{sync.error}”. Work continues on the local cache and syncs will retry on the next change.</span>
-              </p>
             )}
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Btn onClick={() => void pullNow()} disabled={sync.syncing || !isSupabaseConfigured}><IRefresh size={13} /> Pull latest from cloud</Btn>
-              <Btn variant="outline" onClick={() => void seedCloud()} disabled={sync.syncing || !isSupabaseConfigured}><IDownload size={13} /> Seed cloud from this device</Btn>
-              <Btn variant="ghost" onClick={backup}><IDownload size={13} /> JSON backup</Btn>
-            </div>
           </div>
           <div className="border-t border-line-soft bg-pine-950 p-4 text-white md:border-l md:border-t-0">
-            <p className="font-mono text-[9.5px] font-semibold uppercase tracking-[0.2em] text-mint">Go live in 3 steps</p>
+            <p className="font-mono text-[9.5px] font-semibold uppercase tracking-[0.2em] text-mint">Go live in 2 steps</p>
             <ol className="mt-2.5 space-y-2 text-[11px] leading-snug text-white/75">
-              <li className="flex gap-2"><span className="font-mono font-bold text-mint">1.</span> Create a project at supabase.com, then run <span className="rounded bg-white/10 px-1 font-mono text-[10px] text-mint">supabase/schema.sql</span> in the SQL editor (18 tables + RLS).</li>
-              <li className="flex gap-2"><span className="font-mono font-bold text-mint">2.</span> Copy <span className="rounded bg-white/10 px-1 font-mono text-[10px] text-mint">.env.example</span> → <span className="rounded bg-white/10 px-1 font-mono text-[10px] text-mint">.env</span> and paste your project URL + anon key.</li>
-              <li className="flex gap-2"><span className="font-mono font-bold text-mint">3.</span> Rebuild. The app boots from Postgres, pushes every change and falls back to the local cache if the network drops.</li>
+              <li className="flex gap-2"><span className="font-mono font-bold text-mint">1.</span> In your Supabase project, run <span className="rounded bg-white/10 px-1 font-mono text-[10px] text-mint">supabase/schema.sql</span> in the SQL editor — 18 tables, indexes and policies.</li>
+              <li className="flex gap-2"><span className="font-mono font-bold text-mint">2.</span> Paste the Project URL on the left and hit <span className="font-semibold text-mint">Connect & test</span>. The publishable key is already wired in.</li>
             </ol>
-            <p className="mt-3 rounded-lg border border-white/10 bg-white/5 px-2.5 py-2 font-mono text-[9.5px] leading-relaxed text-white/55">
-              VITE_SUPABASE_URL=https://••••.supabase.co<br />VITE_SUPABASE_ANON_KEY=eyJ••••
-            </p>
+            <div className="mt-3 space-y-1.5">
+              <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-white/40">What happens next</p>
+              <ul className="space-y-1 text-[10.5px] text-white/65">
+                <li className="flex gap-1.5"><span className="text-mint">▸</span> Every ward, lab, pharmacy and billing change upserts to Postgres within a second</li>
+                <li className="flex gap-1.5"><span className="text-mint">▸</span> Fresh project → this device seeds the cloud automatically</li>
+                <li className="flex gap-1.5"><span className="text-mint">▸</span> Network drops → the local cache takes over, no work is lost</li>
+              </ul>
+            </div>
           </div>
         </div>
       </Card>

@@ -252,8 +252,11 @@ create or replace function app_is_hms_staff() returns boolean
 language sql stable as
 $$ select app_role() in ('admin','doctor','nurse','reception','lab','pharmacist','billing') $$;
 
--- Staff roles read/write every operational table (write-scope per
--- table is refined below for the sensitive ones).
+-- DEMO POLICIES: the app connects with the project's PUBLISHABLE key
+-- (anon role, no Supabase Auth in this build), so the tables are open
+-- to anon. The HMS itself enforces per-role access in the UI.
+-- For production, swap this block for the role-scoped policies at the
+-- bottom of this file (after adding Supabase Auth).
 do $$
 declare t text;
 begin
@@ -262,25 +265,37 @@ begin
     'medicines','inventory','invoices','beds','admissions','emergencies',
     'claims','notifications','audit_log','queues','vitals_log','app_meta'
   ] loop
-    execute format('drop policy if exists hms_read on %I', t);
-    execute format('create policy hms_read on %I for select to authenticated using (app_is_hms_staff())', t);
-    execute format('drop policy if exists hms_write on %I', t);
-    execute format('create policy hms_write on %I for all to authenticated using (app_is_hms_staff()) with check (app_is_hms_staff())', t);
+    execute format('drop policy if exists hms_open on %I', t);
+    execute format('create policy hms_open on %I for all to anon, authenticated using (true) with check (true)', t);
   end loop;
 end $$;
 
--- Sensitive clinical data: only clinical roles may modify records.
-drop policy if exists hms_write on consultations;
-create policy hms_write on consultations for all to authenticated
-  using (app_role() in ('admin','doctor')) with check (app_role() in ('admin','doctor'));
-
-drop policy if exists hms_write on lab_orders;
-create policy hms_write on lab_orders for all to authenticated
-  using (app_role() in ('admin','doctor','lab')) with check (app_role() in ('admin','doctor','lab'));
-
-drop policy if exists hms_write on audit_log;
-create policy hms_write on audit_log for insert to authenticated
-  with check (app_is_hms_staff());
+-- ============================================================
+-- PRODUCTION HARDENING (optional — run after enabling Auth)
+-- Replaces the open demo policies with role-scoped ones derived
+-- from the signed-in user's metadata role.
+-- ============================================================
+-- do $$
+-- declare t text;
+-- begin
+--   foreach t in array array[
+--     'patients','staff','appointments','consultations','lab_orders','rx_orders',
+--     'medicines','inventory','invoices','beds','admissions','emergencies',
+--     'claims','notifications','audit_log','queues','vitals_log','app_meta'
+--   ] loop
+--     execute format('drop policy if exists hms_open on %I', t);
+--     execute format('create policy hms_staff on %I for all to authenticated using (app_is_hms_staff()) with check (app_is_hms_staff())', t);
+--   end loop;
+-- end $$;
+--
+-- -- Sensitive clinical data: only clinical roles may modify records.
+-- drop policy if exists hms_staff on consultations;
+-- create policy hms_clinical on consultations for all to authenticated
+--   using (app_role() in ('admin','doctor')) with check (app_role() in ('admin','doctor'));
+--
+-- drop policy if exists hms_staff on lab_orders;
+-- create policy hms_lab on lab_orders for all to authenticated
+--   using (app_role() in ('admin','doctor','lab')) with check (app_role() in ('admin','doctor','lab'));
 
 -- ============================================================
 -- First run: after creating the tables, open MediCore HMS →
