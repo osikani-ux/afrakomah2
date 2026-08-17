@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../store";
 import { hasConfig, maskedUrl, configuredUrl, configuredKey, BUILTIN_KEY, TABLES } from "../supabase";
+import schemaSql from "../../supabase/schema.sql?raw";
 import { timeAgo, fmtDate, fmtTime, todayISO, ROLE_META } from "../data";
 import type { Notif } from "../data";
-import { Badge, Btn, Card, SectionHead, SearchBox, Tabs, Empty, downloadJSON } from "../ui";
-import { IBell, ICheck, IShield, IDownload, IRefresh, IAlert, IFlask, IPill, IBed, IReceipt, ICard, ICalendar, IActivity, IGear } from "../icons";
+import { Badge, Btn, Card, SectionHead, SearchBox, Tabs, Empty, downloadJSON, downloadText } from "../ui";
+import { IBell, ICheck, IShield, IDownload, IRefresh, IAlert, IFlask, IPill, IBed, IReceipt, ICard, ICalendar, IActivity, IGear, IClipboard, IFile } from "../icons";
 
 const NICON: Record<Notif["icon"], React.ReactNode> = {
   appt: <ICalendar size={14} />, lab: <IFlask size={14} />, rx: <IPill size={14} />, stock: <IPill size={14} />,
@@ -95,6 +96,17 @@ export function SettingsView() {
     }
   };
 
+  const copySchema = async () => {
+    try {
+      await navigator.clipboard.writeText(schemaSql);
+      toast(`schema.sql copied — ${schemaSql.split("\n").length} lines · paste into the Supabase SQL editor`, "ok");
+      mutate(() => {}, { audit: "Copied supabase/schema.sql to clipboard" });
+    } catch {
+      downloadText("schema.sql", schemaSql);
+      toast("Clipboard blocked by browser — schema.sql downloaded instead", "warn");
+    }
+  };
+
   const audit = useMemo(
     () => db.audit.filter((a) => !auditQ.trim() || (a.user + a.action).toLowerCase().includes(auditQ.toLowerCase())),
     [db.audit, auditQ]
@@ -161,10 +173,14 @@ export function SettingsView() {
                     <span>Cloud unreachable — “{sync.error}”. Work continues on the local cache and syncs will retry on the next change.</span>
                   </p>
                 )}
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <Btn onClick={() => void pullNow()} disabled={sync.syncing}><IRefresh size={13} /> Pull latest from cloud</Btn>
                   <Btn variant="outline" onClick={() => void seedCloud()} disabled={sync.syncing}><IDownload size={13} /> Seed cloud from this device</Btn>
                   <Btn variant="ghost" onClick={backup}><IDownload size={13} /> JSON backup</Btn>
+                  <span className="mx-0.5 hidden h-4 w-px bg-line sm:block" />
+                  <Btn variant="soft" onClick={() => void copySchema()}><IClipboard size={13} /> Copy schema</Btn>
+                  <Btn variant="ghost" onClick={() => { downloadText("schema.sql", schemaSql); toast("schema.sql downloaded", "ok"); }}><IFile size={13} /> schema.sql</Btn>
+                  <span className="mx-0.5 hidden h-4 w-px bg-line sm:block" />
                   <Btn variant="ghost" className="text-alert hover:bg-red-50" onClick={() => { disconnect(); setUrlVal(""); }}><IAlert size={12} /> Disconnect</Btn>
                 </div>
               </>
@@ -205,6 +221,9 @@ export function SettingsView() {
                     )}
                   </Btn>
                   <Btn variant="ghost" onClick={backup}><IDownload size={13} /> JSON backup</Btn>
+                  <span className="mx-0.5 hidden h-4 w-px bg-line sm:block" />
+                  <Btn variant="soft" onClick={() => void copySchema()}><IClipboard size={13} /> Copy schema</Btn>
+                  <Btn variant="ghost" onClick={() => { downloadText("schema.sql", schemaSql); toast("schema.sql downloaded", "ok"); }}><IFile size={13} /> schema.sql</Btn>
                 </div>
                 <p className="text-[10.5px] leading-snug text-ink-faint">
                   Connecting verifies the schema, then seeds a fresh project from this device — or merges existing cloud records. You can also set <span className="font-mono">VITE_SUPABASE_URL</span> in <span className="font-mono">.env</span>.
@@ -215,7 +234,7 @@ export function SettingsView() {
           <div className="border-t border-line-soft bg-pine-950 p-4 text-white md:border-l md:border-t-0">
             <p className="font-mono text-[9.5px] font-semibold uppercase tracking-[0.2em] text-mint">Go live in 2 steps</p>
             <ol className="mt-2.5 space-y-2 text-[11px] leading-snug text-white/75">
-              <li className="flex gap-2"><span className="font-mono font-bold text-mint">1.</span> In your Supabase project, run <span className="rounded bg-white/10 px-1 font-mono text-[10px] text-mint">supabase/schema.sql</span> in the SQL editor — 18 tables, indexes and policies.</li>
+              <li className="flex gap-2"><span className="font-mono font-bold text-mint">1.</span> In your Supabase project, run the schema in the SQL editor — hit <span className="font-semibold text-mint">Copy schema</span> below, or use <span className="rounded bg-white/10 px-1 font-mono text-[10px] text-mint">supabase/schema.sql</span> from the repo. 18 tables, indexes and policies.</li>
               <li className="flex gap-2"><span className="font-mono font-bold text-mint">2.</span> Paste the Project URL on the left and hit <span className="font-semibold text-mint">Connect & test</span>. The publishable key is already wired in.</li>
             </ol>
             <div className="mt-3 space-y-1.5">

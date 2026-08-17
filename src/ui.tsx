@@ -365,6 +365,15 @@ export function downloadCSV(name: string, rows: (string | number)[][]) {
   URL.revokeObjectURL(a.href);
 }
 
+export function downloadText(name: string, text: string) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 export function downloadJSON(name: string, obj: unknown) {
   const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
