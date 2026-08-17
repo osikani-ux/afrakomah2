@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../store";
 import { hasConfig, maskedUrl, configuredUrl, configuredKey, BUILTIN_KEY, TABLES } from "../supabase";
-import schemaSql from "../../supabase/schema.sql?raw";
+import schemaSql from "../../schema.sql?raw";
 import { timeAgo, fmtDate, fmtTime, todayISO, ROLE_META } from "../data";
 import type { Notif } from "../data";
 import { Badge, Btn, Card, SectionHead, SearchBox, Tabs, Empty, downloadJSON, downloadText } from "../ui";
@@ -100,7 +100,7 @@ export function SettingsView() {
     try {
       await navigator.clipboard.writeText(schemaSql);
       toast(`schema.sql copied — ${schemaSql.split("\n").length} lines · paste into the Supabase SQL editor`, "ok");
-      mutate(() => {}, { audit: "Copied supabase/schema.sql to clipboard" });
+      mutate(() => {}, { audit: "Copied schema.sql to clipboard" });
     } catch {
       downloadText("schema.sql", schemaSql);
       toast("Clipboard blocked by browser — schema.sql downloaded instead", "warn");
@@ -234,7 +234,7 @@ export function SettingsView() {
           <div className="border-t border-line-soft bg-pine-950 p-4 text-white md:border-l md:border-t-0">
             <p className="font-mono text-[9.5px] font-semibold uppercase tracking-[0.2em] text-mint">Go live in 2 steps</p>
             <ol className="mt-2.5 space-y-2 text-[11px] leading-snug text-white/75">
-              <li className="flex gap-2"><span className="font-mono font-bold text-mint">1.</span> In your Supabase project, run the schema in the SQL editor — hit <span className="font-semibold text-mint">Copy schema</span> below, or use <span className="rounded bg-white/10 px-1 font-mono text-[10px] text-mint">supabase/schema.sql</span> from the repo. 18 tables, indexes and policies.</li>
+              <li className="flex gap-2"><span className="font-mono font-bold text-mint">1.</span> In your Supabase project, run the schema in the SQL editor — hit <span className="font-semibold text-mint">Copy schema</span> below, or use <span className="rounded bg-white/10 px-1 font-mono text-[10px] text-mint">schema.sql</span> from the repo root. 18 tables, indexes and policies.</li>
               <li className="flex gap-2"><span className="font-mono font-bold text-mint">2.</span> Paste the Project URL on the left and hit <span className="font-semibold text-mint">Connect & test</span>. The publishable key is already wired in.</li>
             </ol>
             <div className="mt-3 space-y-1.5">

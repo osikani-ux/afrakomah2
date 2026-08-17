@@ -2,7 +2,7 @@
    MediCore HMS — Supabase connection layer
    ------------------------------------------------------------
    Config resolution (first match wins):
-     1. .env → VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY
+     1. .env → VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_ANON_KEY)
      2. Runtime config saved from Settings → Database
         (localStorage "medicore-sb-cfg")
    The project's publishable key ships with the build; the
@@ -44,7 +44,7 @@ function normalizeUrl(u: string): string {
 
 export function getConfig(): SbConfig | null {
   const envUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-  const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+  const envKey = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ?? import.meta.env.VITE_SUPABASE_ANON_KEY) as string | undefined;
   if (envUrl && envKey) return { url: normalizeUrl(envUrl), key: envKey };
   return readCfg();
 }
@@ -118,7 +118,7 @@ export async function testConnection(url: string, key: string): Promise<ConnTest
       return {
         ok: false, empty: false,
         error: missing ? "Tables not found in this project" : error.message ?? "Connection failed",
-        hint: missing ? "Run supabase/schema.sql in the Supabase SQL editor, then try again." : "Check the URL and publishable key.",
+        hint: missing ? "Run schema.sql (repo root) in the Supabase SQL editor, then try again." : "Check the URL and publishable key.",
       };
     }
     return { ok: true, empty: (count ?? 0) === 0 };
