@@ -7,7 +7,7 @@ import type { Role, ViewId } from "./data";
 import { Avatar, Badge, Btn, EcgStrip } from "./ui";
 import {
   IPulse, IGrid, IUsers, ICalendar, IList, IStetho, IBed, IFlask, IPill, IBox, IZap,
-  IReceipt, IShield, IChart, IBell, IGear, ISearch, ILogout, IChevR, ICard, ICheck, IAlert, IActivity, IRefresh,
+  IReceipt, IShield, IChart, IBell, IGear, ISearch, ILogout, IChevR, ICard, ICheck, IAlert, IActivity, IRefresh, IMenu,
 } from "./icons";
 import Dashboard from "./views/Dashboard";
 import Patients from "./views/Patients";
@@ -208,6 +208,33 @@ function Login() {
             </div>
           )}
 
+          {!connected && (
+            <div className="mt-4 rounded-xl border border-med-200 bg-white p-4 shadow-sm">
+              <p className="flex items-center gap-2 font-display text-xs font-bold text-ink">
+                <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-med-600 text-white"><IGear size={13} /></span>
+                First-time setup — connect your Supabase project
+              </p>
+              <p className="mt-1.5 text-[10.5px] leading-snug text-ink-faint">
+                Paste the Project URL once (Supabase → Project Settings → API). The publishable key is already wired in; run <span className="font-mono">schema.sql</span> in the SQL editor first.
+              </p>
+              <div className="mt-2.5 space-y-2">
+                <input value={urlVal} onChange={(e) => setUrlVal(e.target.value)} placeholder="https://abcdefgh.supabase.co"
+                  className="w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs outline-none focus:border-med-500 focus:ring-2 focus:ring-med-500/15" />
+                <input value={keyVal} onChange={(e) => setKeyVal(e.target.value)} placeholder="Publishable key (optional — built-in key used if empty)"
+                  className="w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs outline-none focus:border-med-500 focus:ring-2 focus:ring-med-500/15" />
+              </div>
+              {connErr && (
+                <p className="mt-2 flex items-start gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[10.5px] font-semibold leading-snug text-red-800">
+                  <IAlert size={13} className="mt-0.5 shrink-0" /> {connErr.error}{connErr.hint ? ` — ${connErr.hint}` : ""}
+                </p>
+              )}
+              <button onClick={() => void doConnect()} disabled={connBusy}
+                className="mt-2.5 w-full rounded-lg bg-med-600 py-2 text-xs font-bold text-white transition-all hover:bg-med-700 active:scale-[0.99] disabled:opacity-50">
+                {connBusy ? <span className="inline-flex items-center gap-2"><IRefresh size={13} className="animate-spin" /> Testing connection…</span> : "Connect & test"}
+              </button>
+            </div>
+          )}
+
           <form onSubmit={(e) => void submit(e)} className="mt-4 space-y-3">
             <label className="block">
               <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Email address</span>
@@ -249,16 +276,24 @@ function Login() {
 
 function Shell() {
   const { user, nav, go, signOut, sync } = useStore();
+  const [drawer, setDrawer] = useState(false);
   const allowed = ACCESS[user?.role ?? "reception"];
   const view: ViewId = allowed.includes(nav.view) ? nav.view : "dashboard";
   const View = VIEWS[view];
 
   const unread = useUnreadCount();
+  const navTo = (v: ViewId, p?: Partial<Omit<Nav, "view">>) => {
+    go(v, p);
+    setDrawer(false);
+  };
 
   return (
     <div className="bg-clinical flex min-h-screen">
-      {/* sidebar */}
-      <aside className="sticky top-0 flex h-screen w-[218px] shrink-0 flex-col bg-pine-950 text-white">
+      {/* mobile backdrop */}
+      {drawer && <button aria-label="Close menu" onClick={() => setDrawer(false)} className="fixed inset-0 z-40 bg-pine-950/55 backdrop-blur-[2px] lg:hidden" />}
+
+      {/* sidebar — slide-over drawer on mobile, fixed rail on desktop */}
+      <aside className={`fixed inset-y-0 left-0 z-50 flex h-screen w-[240px] shrink-0 flex-col bg-pine-950 text-white shadow-2xl transition-transform duration-200 ease-out lg:sticky lg:top-0 lg:z-auto lg:w-[218px] lg:translate-x-0 lg:shadow-none ${drawer ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="flex items-center gap-2.5 px-4 py-4">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-mint/15 text-mint"><IPulse size={22} /></span>
           <div>
@@ -277,7 +312,7 @@ function Shell() {
                   {items.map((i) => {
                     const active = view === i.id;
                     return (
-                      <button key={i.id} onClick={() => go(i.id)}
+                      <button key={i.id} onClick={() => navTo(i.id)}
                         className={`group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12.5px] font-semibold transition-all ${active ? "bg-pine-800 text-mint" : "text-white/60 hover:bg-pine-900 hover:text-white"}`}>
                         {active && <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r bg-mint" />}
                         <span className={active ? "text-mint" : "text-white/40 group-hover:text-white/70"}>{i.icon}</span>
@@ -317,8 +352,8 @@ function Shell() {
 
       {/* main */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar view={view} />
-        <main className="mx-auto w-full max-w-[1480px] flex-1 px-5 py-5">
+        <TopBar view={view} onMenu={() => setDrawer(true)} />
+        <main className="mx-auto w-full max-w-[1480px] flex-1 px-3 py-4 sm:px-5 sm:py-5">
           <View key={view + (nav.patient ?? "")} />
         </main>
         <footer className="border-t border-line px-5 py-3 text-center font-mono text-[9.5px] text-ink-faint">
@@ -334,7 +369,7 @@ function useUnreadCount() {
   return db.notifications.filter((n) => !n.read && (user?.role === "admin" || n.roles.includes(user?.role ?? "reception"))).length;
 }
 
-function TopBar({ view }: { view: ViewId }) {
+function TopBar({ view, onMenu }: { view: ViewId; onMenu: () => void }) {
   const { db, user, go, mutate } = useStore();
   const [q, setQ] = useState("");
   const [bell, setBell] = useState(false);
@@ -348,14 +383,18 @@ function TopBar({ view }: { view: ViewId }) {
 
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-paper/85 backdrop-blur">
-      <div className="mx-auto flex w-full max-w-[1480px] items-center gap-3 px-5 py-3">
+      <div className="mx-auto flex w-full max-w-[1480px] items-center gap-2 px-3 py-3 sm:gap-3 sm:px-5">
+        <button onClick={onMenu} aria-label="Open menu"
+          className="rounded-lg border border-line bg-white p-2 text-ink-soft transition-all hover:border-med-400 hover:text-med-700 active:scale-95 lg:hidden">
+          <IMenu size={17} />
+        </button>
         <div className="min-w-0">
-          <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.18em] text-med-600">MediCore General Hospital</p>
+          <p className="hidden font-mono text-[9px] font-semibold uppercase tracking-[0.18em] text-med-600 sm:block">MediCore General Hospital</p>
           <h2 className="truncate font-display text-[15px] font-extrabold text-ink">{VIEW_LABEL[view]}</h2>
         </div>
 
         {/* global patient search */}
-        <div className="relative ml-auto w-full max-w-xs">
+        <div className="relative ml-auto w-full max-w-[190px] sm:max-w-[220px] md:max-w-xs">
           <ISearch size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find patient… name / MRN / phone"
             className="w-full rounded-lg border border-line bg-white py-2 pl-9 pr-3 text-xs outline-none transition-colors focus:border-med-500 focus:ring-2 focus:ring-med-500/15" />
@@ -385,7 +424,7 @@ function TopBar({ view }: { view: ViewId }) {
             {mine.length > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-alert px-1 font-mono text-[8.5px] font-bold text-white">{mine.length}</span>}
           </button>
           {bell && (
-            <div className="pop-in absolute right-0 top-full z-50 mt-2 w-[340px] overflow-hidden rounded-xl border border-line bg-white shadow-2xl">
+            <div className="pop-in absolute right-0 top-full z-50 mt-2 w-[340px] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-line bg-white shadow-2xl">
               <div className="flex items-center justify-between border-b border-line-soft px-4 py-2.5">
                 <p className="font-display text-xs font-bold">Unread notifications</p>
                 <button onClick={() => { mutate((d) => { d.notifications.forEach((n) => { n.read = true; }); }, { audit: "Marked all notifications read" }); setBell(false); }} className="flex items-center gap-1 text-[10.5px] font-semibold text-med-600 hover:underline"><ICheck size={11} /> Mark all read</button>
@@ -442,7 +481,7 @@ function ToastHost() {
   const { toasts, dismissToast } = useStore();
   const toneCls = { ok: "border-med-600 bg-pine-900 text-mint", warn: "border-amber-500 bg-amber-50 text-amber-900", danger: "border-alert bg-red-50 text-red-800", info: "border-info bg-sky-50 text-sky-900" };
   return (
-    <div className="pointer-events-none fixed bottom-5 right-5 z-[60] flex w-[340px] flex-col gap-2">
+    <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2 sm:bottom-5 sm:right-5">
       {toasts.map((t) => (
         <button key={t.id} onClick={() => dismissToast(t.id)} className={`toast-in pointer-events-auto rounded-xl border-l-4 px-4 py-3 text-left text-xs font-semibold shadow-xl ${toneCls[t.tone]}`}>
           {t.text}

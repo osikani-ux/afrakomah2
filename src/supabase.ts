@@ -353,3 +353,64 @@ export async function authSignOut(): Promise<void> {
     /* best effort */
   }
 }
+
+/* ---------------- account provisioning (admin) ---------------- */
+
+export interface NewAccount {
+  name: string;
+  email: string;
+  password: string;
+  role: Role;
+  dept?: string;
+  title?: string;
+  phone?: string;
+  staffId?: string;
+}
+
+/** Isolated client used only for provisioning — signing a new user up
+ *  must never replace the administrator's active session. */
+function provisionClient(): SupabaseClient | null {
+  const cfg = getConfig();
+  if (!cfg || !cfg.url || !cfg.key) return null;
+  return createClient(cfg.url, cfg.key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      storageKey: "medicore-provision",
+    },
+  });
+}
+
+/** Creates a Supabase Auth user whose metadata carries the HMS role.
+ *  The staff record itself is written by the store after success. */
+export async function adminCreateUser(
+  a: NewAccount
+): Promise<{ ok: true; userId: string; needsConfirm: boolean } | { ok: false; error: string }> {
+  const c = provisionClient();
+  if (!c) return { ok: false, error: "Not connected to Supabase — connect the database first." };
+  const meta: Record<string, string> = { name: a.name, role: a.role };
+  if (a.dept) meta.dept = a.dept;
+  if (a.title) meta.title = a.title;
+  if (a.phone) meta.phone = a.phone;
+  if (a.staffId) meta.staffId = a.staffId;
+  try {
+    const { data, error } = await c.auth.signUp({
+      email: a.email.trim(),
+      password: a.password,
+      options: { data: meta },
+    });
+    if (error) {
+      const msg = error.message ?? "Account creation failed";
+      if (/already registered/i.test(msg)) return { ok: false, error: "That email is already registered in this project." };
+      if (/password.*short|at least/i.test(msg)) return { ok: false, error: "Password too weak — Supabase requires at least 6 characters." };
+      return { ok: false, error: msg };
+    }
+    if (!data.user) return { ok: false, error: "Sign-up was blocked — make sure the Email provider is enabled in Supabase → Authentication → Providers." };
+    const needsConfirm = !data.session;
+    try { await c.auth.signOut(); } catch { /* keep isolation */ }
+    return { ok: true, userId: data.user.id, needsConfirm };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}

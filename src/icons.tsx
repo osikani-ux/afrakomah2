@@ -136,6 +136,7 @@ export const ISearch = mk(
   </>
 );
 export const IPlus = mk(<path d="M12 5v14M5 12h14" />);
+export const IMenu = mk(<path d="M4 6.5h16M4 12h16M4 17.5h16" />);
 export const IX = mk(<path d="M6 6l12 12M18 6L6 18" />);
 export const ICheck = mk(<path d="M4.5 12.5l5 5L19.5 7" />);
 export const IChevR = mk(<path d="M9 5.5l6.5 6.5L9 18.5" />);

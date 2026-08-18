@@ -3,9 +3,9 @@ import { useStore } from "../store";
 import { hasConfig, maskedUrl, configuredUrl, configuredKey, BUILTIN_KEY, TABLES } from "../supabase";
 import schemaSql from "../../schema.sql?raw";
 import { timeAgo, fmtDate, fmtTime, todayISO, ROLE_META } from "../data";
-import type { Notif } from "../data";
-import { Badge, Btn, Card, SectionHead, SearchBox, Tabs, Empty, downloadJSON, downloadText } from "../ui";
-import { IBell, ICheck, IShield, IDownload, IRefresh, IAlert, IFlask, IPill, IBed, IReceipt, ICard, ICalendar, IActivity, IGear, IClipboard, IFile } from "../icons";
+import type { Notif, Role } from "../data";
+import { Badge, Btn, Card, SectionHead, SearchBox, Tabs, Empty, downloadJSON, downloadText, Input, Select, Field, Modal } from "../ui";
+import { IBell, ICheck, IShield, IDownload, IRefresh, IAlert, IFlask, IPill, IBed, IReceipt, ICard, ICalendar, IActivity, IGear, IClipboard, IFile, IPlus, IUser } from "../icons";
 
 const NICON: Record<Notif["icon"], React.ReactNode> = {
   appt: <ICalendar size={14} />, lab: <IFlask size={14} />, rx: <IPill size={14} />, stock: <IPill size={14} />,
@@ -75,6 +75,7 @@ export function SettingsView() {
   const [auditQ, setAuditQ] = useState("");
   const [confirmReset, setConfirmReset] = useState(false);
   const [sessionMin, setSessionMin] = useState("30");
+  const [provisionOpen, setProvisionOpen] = useState(false);
   const [urlVal, setUrlVal] = useState(configuredUrl());
   const [keyVal, setKeyVal] = useState(configuredKey());
   const [connecting, setConnecting] = useState(false);
@@ -253,7 +254,11 @@ export function SettingsView() {
       <div className="grid gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-2">
           <Card className="p-4">
-            <SectionHead title="User Accounts & Roles" sub={`${db.staff.filter((s) => s.active).length} active of ${db.staff.length} — deactivated accounts cannot sign in`} />
+            <SectionHead
+              title="User Accounts & Roles"
+              sub={`${db.staff.filter((s) => s.active).length} active of ${db.staff.length} — deactivated accounts cannot sign in`}
+              right={<Btn onClick={() => setProvisionOpen(true)}><IPlus size={13} /> Create account</Btn>}
+            />
             <div className="max-h-[340px] divide-y divide-line-soft/70 overflow-y-auto">
               {db.staff.map((s) => (
                 <div key={s.id} className={`flex items-center justify-between gap-3 py-2.5 ${!s.active ? "opacity-50" : ""}`}>
@@ -324,21 +329,23 @@ export function SettingsView() {
             <SectionHead title="Data Management" />
             <div className="space-y-2">
               <Btn variant="soft" className="w-full justify-center" onClick={backup}><IDownload size={14} /> Download backup (JSON)</Btn>
-              <Btn variant="danger" className="w-full justify-center" onClick={() => setConfirmReset(true)}><IRefresh size={14} /> Reset demo data</Btn>
+              <Btn variant="danger" className="w-full justify-center" onClick={() => setConfirmReset(true)}><IRefresh size={14} /> Reset local copy</Btn>
             </div>
-            <p className="mt-2 flex items-center gap-1.5 text-[10.5px] text-ink-faint"><IGear size={11} /> Reset restores the seeded demonstration database.</p>
+            <p className="mt-2 flex items-center gap-1.5 text-[10.5px] text-ink-faint"><IGear size={11} /> Clears this device's cache — the next boot re-syncs from Supabase.</p>
           </Card>
         </div>
       </div>
 
+      {provisionOpen && <ProvisionAccountModal onClose={() => setProvisionOpen(false)} />}
+
       {confirmReset && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-pine-950/55 p-4" onMouseDown={() => setConfirmReset(false)}>
           <div className="pop-in w-full max-w-sm rounded-2xl border border-line bg-white p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-            <p className="font-display text-sm font-bold text-ink">Reset all data?</p>
-            <p className="mt-1 text-xs text-ink-faint">Every change you made will be discarded and the demo database restored. This cannot be undone.</p>
+            <p className="font-display text-sm font-bold text-ink">Reset this device?</p>
+            <p className="mt-1 text-xs text-ink-faint">Clears the local working copy so the next boot re-hydrates from Supabase. Cloud data and Auth users are not touched.</p>
             <div className="mt-4 flex justify-end gap-2">
               <Btn variant="ghost" onClick={() => setConfirmReset(false)}>Keep my data</Btn>
-              <Btn variant="danger" onClick={() => { localStorage.removeItem("medicore-db-v3"); localStorage.removeItem("medicore-user-v3"); location.reload(); }}>
+              <Btn variant="danger" onClick={() => { localStorage.removeItem("medicore-db-v4"); localStorage.removeItem("medicore-user-v3"); location.reload(); }}>
                 <IRefresh size={13} /> Yes, reset
               </Btn>
             </div>
@@ -346,5 +353,83 @@ export function SettingsView() {
         </div>
       )}
     </div>
+  );
+}
+
+/* ---------------- provision staff account (admin) ---------------- */
+
+function ProvisionAccountModal({ onClose }: { onClose: () => void }) {
+  const { createAccount, toast } = useStore();
+  const [f, setF] = useState({ name: "", email: "", password: "", role: "doctor" as Role, dept: "", title: "", phone: "", staffId: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
+
+  const submit = async () => {
+    if (!f.name.trim() || !f.email.trim() || !f.password) {
+      setErr("Name, email and password are required.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    const res = await createAccount({
+      name: f.name, email: f.email, password: f.password, role: f.role,
+      dept: f.dept || undefined, title: f.title || undefined, phone: f.phone || undefined,
+      staffId: f.staffId || undefined,
+    });
+    setBusy(false);
+    if (res.error) {
+      setErr(res.error);
+      return;
+    }
+    toast(
+      res.needsConfirm
+        ? `Account created — ${f.name} must confirm their email before first sign-in`
+        : `Account created — ${f.name} can sign in now with their password`,
+      "ok"
+    );
+    onClose();
+  };
+
+  return (
+    <Modal
+      title="Create Staff Account"
+      sub="Creates a Supabase Auth login with the HMS role embedded — the staff record is added automatically"
+      onClose={onClose}
+      w="max-w-lg"
+      footer={
+        <>
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={() => void submit()} disabled={busy}>
+            {busy ? <IRefresh size={13} className="animate-spin" /> : <IUser size={13} />} {busy ? "Creating…" : "Create account"}
+          </Btn>
+        </>
+      }
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Full name *"><Input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Dr. Ama Owusu" /></Field>
+        <Field label="Role *">
+          <Select value={f.role} onChange={(e) => set("role", e.target.value)}>
+            {(Object.keys(ROLE_META) as Role[]).map((r) => <option key={r} value={r}>{ROLE_META[r].label}</option>)}
+          </Select>
+        </Field>
+        <Field label="Email (login) *" className="col-span-2"><Input type="email" value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="name@hospital.org" /></Field>
+        <Field label="Temporary password *"><Input value={f.password} onChange={(e) => set("password", e.target.value)} placeholder="min. 6 characters" /></Field>
+        <Field label="Staff ID (optional)"><Input value={f.staffId} onChange={(e) => set("staffId", e.target.value)} placeholder="auto if empty" /></Field>
+        <Field label="Department"><Input value={f.dept} onChange={(e) => set("dept", e.target.value)} placeholder="e.g. Paediatrics" /></Field>
+        <Field label="Job title"><Input value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. Staff Nurse" /></Field>
+        <Field label="Phone"><Input value={f.phone} onChange={(e) => set("phone", e.target.value)} placeholder="024 …" /></Field>
+      </div>
+      {err && (
+        <p className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-semibold leading-snug text-red-800">
+          <IAlert size={14} className="mt-0.5 shrink-0" /> {err}
+        </p>
+      )}
+      <p className="mt-3 rounded-lg bg-paper/70 px-3 py-2 text-[10.5px] leading-relaxed text-ink-faint">
+        They sign in on any workstation with this email + password and land in their role's workspace.
+        If <span className="font-semibold text-ink-soft">Email Confirmation</span> is enabled in Supabase → Authentication, they confirm first
+        (turn it off for instant access).
+      </p>
+    </Modal>
   );
 }

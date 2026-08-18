@@ -6,9 +6,9 @@ import {
   hasConfig, fetchCloud, cloudHasData, pushTables, pushAll,
   changedTables, deletedIds, purgeDeleted, TABLES,
   saveSbConfig, clearSbConfig, testConnection,
-  authSignIn, authGetSession, authOnChange, authSignOut,
+  authSignIn, authGetSession, authOnChange, authSignOut, adminCreateUser,
 } from "./supabase";
-import type { TableSpec, ConnTest, AuthUser } from "./supabase";
+import type { TableSpec, ConnTest, AuthUser, NewAccount } from "./supabase";
 
 export interface Nav {
   view: ViewId;
@@ -52,6 +52,7 @@ interface StoreShape {
   seedCloud: () => Promise<void>;
   connect: (url: string, key: string) => Promise<ConnTest>;
   disconnect: () => void;
+  createAccount: (a: NewAccount) => Promise<{ error: string | null; needsConfirm: boolean }>;
 }
 
 const Ctx = createContext<StoreShape>(null!);
@@ -407,9 +408,41 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     toast("Disconnected — running on this device's data", "info");
   }, [toast]);
 
+  /* ---------- account provisioning (admin → other departments) ---------- */
+  const createAccount = useCallback(
+    async (a: NewAccount): Promise<{ error: string | null; needsConfirm: boolean }> => {
+      const res = await adminCreateUser(a);
+      if (!res.ok) return { error: res.error, needsConfirm: false };
+      mutate(
+        (d) => {
+          const id = a.staffId ?? nid("S", d.staff.map((s) => s.id));
+          const exists = d.staff.some((s) => s.email?.toLowerCase() === a.email.trim().toLowerCase());
+          if (!exists) {
+            d.staff.push({
+              id, name: a.name.trim(), role: a.role,
+              dept: a.dept ?? ROLE_META[a.role].label,
+              title: a.title ?? ROLE_META[a.role].label,
+              phone: a.phone ?? "—",
+              status: "off-duty",
+              schedule: ["Mon", "Tue", "Wed", "Thu", "Fri"],
+              active: true,
+              email: a.email.trim(),
+            });
+          }
+        },
+        {
+          audit: `Provisioned ${ROLE_META[a.role].label} account for ${a.name} (${a.email})`,
+          notify: { text: `New account created: ${a.name} — ${ROLE_META[a.role].label}`, icon: "alert", roles: ["admin"] },
+        }
+      );
+      return { error: null, needsConfirm: res.needsConfirm };
+    },
+    [mutate]
+  );
+
   const value = useMemo(
-    () => ({ db, user, signIn, signOut, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud, connect, disconnect }),
-    [db, user, signIn, signOut, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud, connect, disconnect]
+    () => ({ db, user, signIn, signOut, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud, connect, disconnect, createAccount }),
+    [db, user, signIn, signOut, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud, connect, disconnect, createAccount]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
