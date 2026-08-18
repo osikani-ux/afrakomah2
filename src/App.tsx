@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { StoreProvider, useStore } from "./store";
 import type { Nav } from "./store";
 import { hasConfig, maskedUrl, configuredUrl } from "./supabase";
@@ -56,11 +56,46 @@ const VIEW_LABEL: Record<ViewId, string> = {
   notifications: "Notifications", settings: "Settings",
 };
 
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="bg-clinical flex min-h-screen items-center justify-center p-6">
+          <div className="w-full max-w-md rounded-2xl border border-line bg-white p-6 shadow-xl">
+            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-alert"><IAlert size={22} /></span>
+            <h1 className="mt-3 font-display text-lg font-extrabold text-ink">MediCore hit a fault</h1>
+            <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+              The interface stopped unexpectedly. Your records are safe — they live in Supabase and this device's cache.
+            </p>
+            <p className="mt-3 rounded-lg bg-paper/80 p-2.5 font-mono text-[10px] leading-relaxed text-ink-faint">{String(this.state.error)}</p>
+            <button
+              onClick={() => { this.setState({ error: null }); window.location.reload(); }}
+              className="mt-4 w-full rounded-xl bg-pine-900 py-2.5 font-display text-sm font-bold text-mint transition-all hover:bg-pine-800"
+            >
+              Reload MediCore
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
-    <StoreProvider>
-      <Root />
-    </StoreProvider>
+    <ErrorBoundary>
+      <StoreProvider>
+        <Root />
+      </StoreProvider>
+    </ErrorBoundary>
   );
 }
 

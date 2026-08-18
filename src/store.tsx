@@ -144,6 +144,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     let unsub: (() => void) | null = null;
+    // hard failsafe — the app must reach a usable screen no matter what
+    const failsafe = window.setTimeout(() => setBooting(false), 12000);
     (async () => {
       if (hasConfig()) {
         const local = loadDB();
@@ -201,6 +203,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     })();
     return () => {
       cancelled = true;
+      window.clearTimeout(failsafe);
       unsub?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
