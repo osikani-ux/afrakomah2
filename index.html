@@ -17,9 +17,57 @@
       href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
+    <style>
+      html, body { margin: 0; background: #f1f5f2; }
+      #boot-fallback {
+        display: none; position: fixed; inset: 0; z-index: 9999;
+        background: #071914; color: #e7eeea;
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        padding: 24px; overflow: auto;
+      }
+      #boot-fallback .card {
+        max-width: 560px; margin: 8vh auto; border: 1px solid #18453a;
+        border-radius: 14px; background: #0b241e; padding: 28px;
+      }
+      #boot-fallback h1 { font-size: 18px; margin: 0 0 6px; color: #2fd3a7; }
+      #boot-fallback p { font-size: 12.5px; line-height: 1.6; color: #b9c8c2; margin: 8px 0; }
+      #boot-fallback code { display: block; margin-top: 12px; padding: 10px; border-radius: 8px; background: #071914; color: #f3b8ac; font-size: 11px; white-space: pre-wrap; word-break: break-word; }
+      #boot-fallback button {
+        margin-top: 16px; border: 0; border-radius: 10px; background: #2fd3a7;
+        color: #071914; font-weight: 700; font-size: 13px; padding: 11px 18px; cursor: pointer;
+      }
+    </style>
+    <script>
+      /* Watchdog: if the app never mounts (bundle failed to load, crashed at
+         evaluation, or an environment fault), show a diagnosis instead of a
+         blank page. Runs on plain JS — independent of the app bundle. */
+      window.__bootError = null;
+      window.addEventListener("error", function (e) { window.__bootError = e.message || "script error"; });
+      window.addEventListener("unhandledrejection", function (e) { window.__bootError = (e.reason && e.reason.message) || "promise rejected"; });
+      window.setTimeout(function () {
+        var root = document.getElementById("root");
+        if (root && root.children.length === 0) {
+          var fb = document.getElementById("boot-fallback");
+          var detail = document.getElementById("boot-detail");
+          var msg = window.__bootError ||
+            "The interface bundle did not mount within 8 seconds. This is usually a stale cached build — force a reload, or re-run the preview build.";
+          detail.textContent = msg;
+          fb.style.display = "block";
+        }
+      }, 8000);
+    </script>
   </head>
   <body>
     <div id="root"></div>
+    <div id="boot-fallback">
+      <div class="card">
+        <h1>MediCore HMS — boot check</h1>
+        <p>The hospital interface did not start. Your records are safe (they live in Supabase and the device cache) — this is a client-side boot fault.</p>
+        <code id="boot-detail"></code>
+        <p>Try: force reload (Ctrl/Cmd + Shift + R). If the preview serves a cached build, re-run “npm run build” and reopen the preview.</p>
+        <button onclick="location.reload()">Reload MediCore</button>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

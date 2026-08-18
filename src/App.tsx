@@ -222,28 +222,6 @@ function Login() {
           </div>
 
           {!connected && (
-            <div className="mt-4 rounded-xl border border-line bg-white p-4">
-              <p className="flex items-center gap-2 font-display text-xs font-bold text-ink"><IShield size={14} className="text-med-600" /> Connect the hospital database</p>
-              <p className="mt-1 text-[10.5px] leading-snug text-ink-faint">Run <span className="rounded bg-line-soft px-1 font-mono text-[9.5px]">schema.sql</span> in the Supabase SQL editor, then paste the Project URL. The publishable key is already wired in.</p>
-              <div className="mt-3 space-y-2">
-                <input value={urlVal} onChange={(e) => setUrlVal(e.target.value)} placeholder="https://your-project-ref.supabase.co"
-                  className="w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs outline-none focus:border-med-500 focus:ring-2 focus:ring-med-500/15" />
-                <input value={keyVal} onChange={(e) => setKeyVal(e.target.value)} placeholder="Publishable key (optional — built-in key is used)"
-                  className="w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs outline-none focus:border-med-500 focus:ring-2 focus:ring-med-500/15" />
-                {connErr && (
-                  <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[10.5px] font-semibold leading-snug text-red-800">
-                    {connErr.error}{connErr.hint ? <> <span className="font-normal text-red-700">— {connErr.hint}</span></> : null}
-                  </p>
-                )}
-                <button onClick={() => void doConnect()} disabled={connBusy}
-                  className="w-full rounded-lg border border-med-600 bg-med-50 py-2 text-xs font-bold text-med-700 transition-all hover:bg-med-100 active:scale-[0.99] disabled:opacity-50">
-                  {connBusy ? "Testing connection…" : "Connect & test"}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {!connected && (
             <div className="mt-4 rounded-xl border border-med-200 bg-white p-4 shadow-sm">
               <p className="flex items-center gap-2 font-display text-xs font-bold text-ink">
                 <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-med-600 text-white"><IGear size={13} /></span>
