@@ -1,13 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { seedDB, nowISO, todayISO } from "./data";
+import { emptyDB, nowISO, todayISO, ROLE_META } from "./data";
 import type { DB, InvoiceItem, Notif, Role, Staff, ViewId } from "./data";
 import {
   hasConfig, fetchCloud, cloudHasData, pushTables, pushAll,
   changedTables, deletedIds, purgeDeleted, TABLES,
   saveSbConfig, clearSbConfig, testConnection,
+  authSignIn, authGetSession, authOnChange, authSignOut,
 } from "./supabase";
-import type { TableSpec, ConnTest } from "./supabase";
+import type { TableSpec, ConnTest, AuthUser } from "./supabase";
 
 export interface Nav {
   view: ViewId;
@@ -37,8 +38,8 @@ interface MutateOpts {
 interface StoreShape {
   db: DB;
   user: Staff | null;
-  login: (staffId: string) => void;
-  logout: () => void;
+  signIn: (email: string, password: string) => Promise<string | null>;
+  signOut: () => Promise<void>;
   mutate: (fn: (d: DB) => void, opts?: MutateOpts) => void;
   toast: (text: string, tone?: ToastMsg["tone"]) => void;
   toasts: ToastMsg[];
@@ -56,30 +57,19 @@ interface StoreShape {
 const Ctx = createContext<StoreShape>(null!);
 export const useStore = () => useContext(Ctx);
 
-const DB_KEY = "medicore-db-v3";
-const USER_KEY = "medicore-user-v3";
+const DB_KEY = "medicore-db-v4";
 
 function loadDB(): DB {
   try {
     const raw = localStorage.getItem(DB_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as DB;
-      if (parsed && parsed.v === 3) return parsed;
+      if (parsed && parsed.v === 4) return parsed;
     }
   } catch {
-    /* fall through to seed */
+    /* fall through to a fresh database */
   }
-  return seedDB();
-}
-
-function loadUser(): Staff | null {
-  try {
-    const raw = localStorage.getItem(USER_KEY);
-    if (raw) return JSON.parse(raw) as Staff;
-  } catch {
-    /* ignore */
-  }
-  return null;
+  return emptyDB();
 }
 
 /** Cloud rows win; empty cloud tables fall back to the local snapshot. */
@@ -101,16 +91,41 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+const HOME: Record<Role, ViewId> = {
+  admin: "dashboard", doctor: "patients", nurse: "wards", reception: "patients",
+  lab: "lab", pharmacist: "pharmacy", billing: "billing",
+};
+
+/** Resolves an authenticated identity to a staff record, provisioning
+ *  one on first sign-in from the user's metadata. */
+function resolveStaff(au: AuthUser, d: DB): { staff: Staff; isNew: boolean } {
+  const existing = d.staff.find((s) => (s.email && s.email.toLowerCase() === au.email.toLowerCase()) || (au.staffId && s.id === au.staffId));
+  if (existing) return { staff: existing, isNew: false };
+  const staff: Staff = {
+    id: au.staffId ?? `S-${au.id.replace(/-/g, "").slice(0, 8).toUpperCase()}`,
+    name: au.name,
+    role: au.role,
+    dept: au.dept ?? ROLE_META[au.role].label,
+    title: au.title ?? ROLE_META[au.role].label,
+    phone: au.phone ?? "—",
+    status: "on-duty",
+    schedule: ["Mon", "Tue", "Wed", "Thu", "Fri"],
+    active: true,
+    email: au.email,
+  };
+  return { staff, isNew: true };
+}
+
 let toastSeq = 1;
-let auditSeq = 100;
-let notifSeq = 100;
+let auditSeq = Date.now() % 100000;
+let notifSeq = Date.now() % 100000;
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [db, setDb] = useState<DB>(loadDB);
-  const [user, setUser] = useState<Staff | null>(loadUser);
+  const [user, setUser] = useState<Staff | null>(null);
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
   const [nav, setNav] = useState<Nav>({ view: "dashboard" });
-  const [booting, setBooting] = useState(() => hasConfig());
+  const [booting, setBooting] = useState(true);
   const [sync, setSync] = useState<SyncState>({
     mode: hasConfig() ? "cloud" : "local",
     syncing: false, pending: 0, lastSyncAt: null, error: null,
@@ -124,39 +139,70 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const pendingKeys = useRef<Set<keyof DB>>(new Set());
   const pendingDeletes = useRef<Map<string, Set<string>>>(new Map());
 
-  /* ---------- boot: hydrate from Supabase when configured ---------- */
+  /* ---------- boot: hydrate database, restore secure session ---------- */
   useEffect(() => {
-    if (!hasConfig()) {
-      setBooting(false);
-      return;
-    }
     let cancelled = false;
+    let unsub: (() => void) | null = null;
     (async () => {
-      const local = loadDB();
-      try {
-        const has = await withTimeout(cloudHasData(), 8000);
-        if (!has) {
-          // Fresh project — push this device's dataset so every
-          // workstation starts from the same live database.
-          await withTimeout(pushAll(local), 20000);
-          if (cancelled) return;
-          setDb(local);
-        } else {
-          const cloud = await withTimeout(fetchCloud(), 15000);
-          if (cancelled) return;
-          if (cloud) setDb(mergeCloud(local, cloud));
+      if (hasConfig()) {
+        const local = loadDB();
+        try {
+          const has = await withTimeout(cloudHasData(), 8000);
+          if (!has) {
+            // Fresh project — push this device's structure so every
+            // workstation starts from the same live database.
+            await withTimeout(pushAll(local), 20000);
+            if (!cancelled) {
+              dbRef.current = local;
+              setDb(local);
+            }
+          } else {
+            const cloud = await withTimeout(fetchCloud(), 15000);
+            if (!cancelled && cloud) {
+              const merged = mergeCloud(local, cloud);
+              dbRef.current = merged;
+              setDb(merged);
+            }
+          }
+          if (!cancelled) setSync({ mode: "cloud", syncing: false, pending: 0, lastSyncAt: nowISO(), error: null });
+        } catch (e) {
+          if (!cancelled) setSync({ mode: "cloud", syncing: false, pending: 0, lastSyncAt: null, error: (e as Error).message });
         }
-        setSync({ mode: "cloud", syncing: false, pending: 0, lastSyncAt: nowISO(), error: null });
-      } catch (e) {
-        if (cancelled) return;
-        setSync({ mode: "cloud", syncing: false, pending: 0, lastSyncAt: null, error: (e as Error).message });
-      } finally {
-        if (!cancelled) setBooting(false);
+
+        // restore the signed-in session (Supabase keeps the token)
+        try {
+          const au = await withTimeout(authGetSession(), 8000);
+          if (!cancelled && au) {
+            const { staff, isNew } = resolveStaff(au, dbRef.current);
+            if (!staff.active) {
+              await authSignOut();
+            } else {
+              if (isNew) {
+                dbRef.current = { ...dbRef.current, staff: [...dbRef.current.staff, staff] };
+                setDb(dbRef.current);
+                schedulePushRef.current?.(["staff"], dbRef.current, dbRef.current);
+              }
+              setUser(staff);
+              setNav({ view: HOME[staff.role] });
+            }
+          }
+        } catch {
+          /* session restore is best-effort */
+        }
+        if (!cancelled) unsub = authOnChange((au) => {
+          if (!au) {
+            setUser(null);
+            setNav({ view: "dashboard" });
+          }
+        });
       }
+      if (!cancelled) setBooting(false);
     })();
     return () => {
       cancelled = true;
+      unsub?.();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ---------- local cache (offline fallback in every mode) ---------- */
@@ -164,18 +210,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     try {
       localStorage.setItem(DB_KEY, JSON.stringify(db));
     } catch {
-      /* storage full — demo continues in memory */
+      /* storage full — work continues in memory */
     }
   }, [db]);
-
-  useEffect(() => {
-    try {
-      if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
-      else localStorage.removeItem(USER_KEY);
-    } catch {
-      /* ignore */
-    }
-  }, [user]);
 
   const toast = useCallback((text: string, tone: ToastMsg["tone"] = "ok") => {
     const id = toastSeq++;
@@ -188,7 +225,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const schedulePush = useCallback((changed: (keyof DB)[], prev: DB, next: DB) => {
     if (!hasConfig()) return;
     changed.forEach((k) => pendingKeys.current.add(k));
-    // collect deleted primary keys for keyed tables
     changed.forEach((k) => {
       const spec = TABLES.find((t) => t.key === k);
       if (!spec || spec.fullReplace) return;
@@ -219,6 +255,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     }, 650);
   }, []);
+  const schedulePushRef = useRef<typeof schedulePush | null>(null);
+  schedulePushRef.current = schedulePush;
 
   const mutate = useCallback(
     (fn: (d: DB) => void, opts?: MutateOpts) => {
@@ -245,25 +283,41 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [schedulePush]
   );
 
-  const login = useCallback(
-    (staffId: string) => {
-      const s = dbRef.current.staff.find((x) => x.id === staffId);
-      if (!s) return;
-      setUser(s);
-      const home: Record<Role, ViewId> = {
-        admin: "dashboard", doctor: "patients", nurse: "wards", reception: "patients",
-        lab: "lab", pharmacist: "pharmacy", billing: "billing",
-      };
-      setNav({ view: home[s.role] });
-      toast(`Signed in as ${s.name} — ${s.dept}`, "ok");
+  /* ---------- authentication ---------- */
+  const signIn = useCallback(
+    async (email: string, password: string): Promise<string | null> => {
+      const res = await authSignIn(email, password);
+      if (!res.ok) return res.error;
+      const { staff, isNew } = resolveStaff(res.user, dbRef.current);
+      if (!staff.active) {
+        await authSignOut();
+        return "This account has been deactivated by an administrator.";
+      }
+      if (isNew) {
+        mutate((d) => {
+          d.staff.push(staff);
+          d.audit.unshift({
+            id: `AU-${auditSeq++}`, at: nowISO(), user: staff.name, role: staff.role,
+            action: `Signed in — staff account provisioned from Supabase Auth (${staff.email})`,
+          });
+        });
+      } else {
+        mutate(() => {}, { audit: `Signed in to the ${ROLE_META[staff.role].label} workspace` });
+      }
+      setUser(staff);
+      setNav({ view: HOME[staff.role] });
+      toast(`Welcome, ${staff.name} — ${ROLE_META[staff.role].label} workspace`, "ok");
+      return null;
     },
-    [toast]
+    [mutate, toast]
   );
 
-  const logout = useCallback(() => {
+  const signOut = useCallback(async () => {
+    mutate(() => {}, { audit: "Signed out" });
+    await authSignOut();
     setUser(null);
     setNav({ view: "dashboard" });
-  }, []);
+  }, [mutate]);
 
   const go = useCallback((view: ViewId, params?: Partial<Omit<Nav, "view">>) => {
     setNav({ view, ...params });
@@ -301,11 +355,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     try {
       await withTimeout(pushAll(dbRef.current), 25000);
       setSync((s) => ({ ...s, syncing: false, lastSyncAt: nowISO() }));
-      toast("Cloud database seeded — all tables pushed to Supabase", "ok");
-      mutate(() => {}, { audit: "Seeded Supabase cloud database from this device" });
+      toast("Cloud database updated — all tables pushed to Supabase", "ok");
+      mutate(() => {}, { audit: "Pushed full database to Supabase cloud" });
     } catch (e) {
       setSync((s) => ({ ...s, syncing: false, error: (e as Error).message }));
-      toast(`Seed failed — ${(e as Error).message}`, "danger");
+      toast(`Push failed — ${(e as Error).message}`, "danger");
     }
   }, [toast, mutate]);
 
@@ -325,7 +379,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const local = dbRef.current;
         if (res.empty) {
           await withTimeout(pushAll(local), 25000);
-          toast("Connected — this device's dataset seeded the fresh project", "ok");
+          toast("Connected — this device's records seeded the fresh project", "ok");
           mutate(() => {}, { audit: "Connected Supabase project and seeded cloud database" });
         } else {
           const cloud = await withTimeout(fetchCloud(), 15000);
@@ -354,8 +408,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [toast]);
 
   const value = useMemo(
-    () => ({ db, user, login, logout, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud, connect, disconnect }),
-    [db, user, login, logout, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud, connect, disconnect]
+    () => ({ db, user, signIn, signOut, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud, connect, disconnect }),
+    [db, user, signIn, signOut, mutate, toast, toasts, dismissToast, nav, go, booting, sync, pullNow, seedCloud, connect, disconnect]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

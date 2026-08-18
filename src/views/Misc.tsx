@@ -232,17 +232,18 @@ export function SettingsView() {
             )}
           </div>
           <div className="border-t border-line-soft bg-pine-950 p-4 text-white md:border-l md:border-t-0">
-            <p className="font-mono text-[9.5px] font-semibold uppercase tracking-[0.2em] text-mint">Go live in 2 steps</p>
+            <p className="font-mono text-[9.5px] font-semibold uppercase tracking-[0.2em] text-mint">Go live in 3 steps</p>
             <ol className="mt-2.5 space-y-2 text-[11px] leading-snug text-white/75">
-              <li className="flex gap-2"><span className="font-mono font-bold text-mint">1.</span> In your Supabase project, run the schema in the SQL editor — hit <span className="font-semibold text-mint">Copy schema</span> below, or use <span className="rounded bg-white/10 px-1 font-mono text-[10px] text-mint">schema.sql</span> from the repo root. 18 tables, indexes and policies.</li>
+              <li className="flex gap-2"><span className="font-mono font-bold text-mint">1.</span> Run the schema in the SQL editor — hit <span className="font-semibold text-mint">Copy schema</span> below, or use <span className="rounded bg-white/10 px-1 font-mono text-[10px] text-mint">schema.sql</span> from the repo root. 18 tables, indexes and policies.</li>
               <li className="flex gap-2"><span className="font-mono font-bold text-mint">2.</span> Paste the Project URL on the left and hit <span className="font-semibold text-mint">Connect & test</span>. The publishable key is already wired in.</li>
+              <li className="flex gap-2"><span className="font-mono font-bold text-mint">3.</span> Create staff under <span className="font-semibold text-mint">Authentication → Users</span> with metadata <span className="rounded bg-white/10 px-1 font-mono text-[9px] text-mint">{"{ \"name\": …, \"role\": … }"}</span> — roles: admin, doctor, nurse, reception, lab, pharmacist, billing.</li>
             </ol>
             <div className="mt-3 space-y-1.5">
               <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-white/40">What happens next</p>
               <ul className="space-y-1 text-[10.5px] text-white/65">
+                <li className="flex gap-1.5"><span className="text-mint">▸</span> Each user's staff record is provisioned automatically on first sign-in</li>
                 <li className="flex gap-1.5"><span className="text-mint">▸</span> Every ward, lab, pharmacy and billing change upserts to Postgres within a second</li>
-                <li className="flex gap-1.5"><span className="text-mint">▸</span> Fresh project → this device seeds the cloud automatically</li>
-                <li className="flex gap-1.5"><span className="text-mint">▸</span> Network drops → the local cache takes over, no work is lost</li>
+                <li className="flex gap-1.5"><span className="text-mint">▸</span> Deactivating an account here blocks that user's next sign-in</li>
               </ul>
             </div>
           </div>
@@ -260,7 +261,7 @@ export function SettingsView() {
                     <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-pine-900 font-mono text-[10px] font-bold text-mint">{s.id}</span>
                     <div>
                       <p className="text-xs font-bold text-ink">{s.name}</p>
-                      <p className="text-[10px] text-ink-faint">{s.title} · {s.dept}</p>
+                      <p className="text-[10px] text-ink-faint">{s.title} · {s.dept}{s.email ? <> · <span className="font-mono text-[9.5px]">{s.email}</span></> : null}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">

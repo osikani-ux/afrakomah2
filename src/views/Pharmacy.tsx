@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
 import { useStore, nid, charge } from "../store";
-import { todayISO, dISO, fmtDate, timeAgo, ghs } from "../data";
+import { todayISO, dISO, fmtDate, fmtShort, timeAgo, ghs } from "../data";
 import type { RxOrder } from "../data";
 import { Badge, Btn, Card, Field, Input, Modal, SectionHead, Select, StatusPill, Tabs, Empty, Avatar, HBars } from "../ui";
-import { IPill, ICheck, IAlert, IBox, IRefresh, ITruck, IEye } from "../icons";
+import { IPill, ICheck, IAlert, IBox, IRefresh, ITruck, IEye, IReceipt, IPlus } from "../icons";
 
 export function expiryState(expiry: string) {
   const t = todayISO();
@@ -19,6 +19,7 @@ export default function PharmacyView() {
   const [tab, setTab] = useState(nav.tab === "inventory" ? "inventory" : "rx");
   const [dispenseFor, setDispenseFor] = useState<RxOrder | null>(null);
   const [restockFor, setRestockFor] = useState<string | null>(null);
+  const [addMed, setAddMed] = useState(false);
 
   const canDispense = user?.role === "pharmacist" || user?.role === "admin";
   const t = todayISO();
@@ -36,6 +37,7 @@ export default function PharmacyView() {
           <h1 className="font-display text-lg font-extrabold text-ink">Pharmacy</h1>
           <p className="text-xs text-ink-faint">E-prescriptions dispensed against live inventory — stock decrements automatically</p>
         </div>
+        <Btn onClick={() => setAddMed(true)}><IPlus size={14} /> Add medicine</Btn>
         <div className="flex flex-wrap gap-1.5 text-[10.5px] font-bold">
           <span className="flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-red-700">● Expired {expired.length}</span>
           <span className="flex items-center gap-1 rounded-lg border border-orange-200 bg-orange-50 px-2 py-1 text-orange-700">● Expiring ≤30d {expiring.length}</span>
@@ -50,7 +52,10 @@ export default function PharmacyView() {
         { k: "sold", label: "Top Sellers" },
       ]} />
 
-      {tab === "rx" && (
+      {tab === "rx" && db.rxOrders.length === 0 && (
+        <Empty icon={<IPill size={26} />} title="No prescriptions yet" sub="When a doctor issues an e-prescription it appears here instantly, ready to dispense." />
+      )}
+      {tab === "rx" && db.rxOrders.length > 0 && (
         <Card className="overflow-x-auto p-4">
           <table className="w-full min-w-[780px] text-left text-xs">
             <thead>
@@ -91,7 +96,10 @@ export default function PharmacyView() {
         </Card>
       )}
 
-      {tab === "inventory" && (
+      {tab === "inventory" && db.medicines.length === 0 && (
+        <Empty icon={<IPill size={26} />} title="No medicines in stock" sub="Add your first medicine to start tracking batches, expiry dates and dispensing." />
+      )}
+      {tab === "inventory" && db.medicines.length > 0 && (
         <Card className="overflow-x-auto p-4">
           <table className="w-full min-w-[880px] text-left text-xs">
             <thead>
@@ -142,31 +150,99 @@ export default function PharmacyView() {
       {tab === "sold" && (
         <div className="grid gap-4 md:grid-cols-2">
           <Card className="p-4">
-            <SectionHead title="Most Dispensed — 30 days" sub="Units dispensed per product" />
-            <HBars items={[
-              { label: "Paracetamol 500mg", value: 640, color: "#0e7a63" },
-              { label: "Artemether-Lumefantrine", value: 410, color: "#1d6fb8" },
-              { label: "Amoxicillin 500mg", value: 355, color: "#b45309" },
-              { label: "Metformin 500mg", value: 290, color: "#0f766e" },
-              { label: "Amlodipine 10mg", value: 210, color: "#be123c" },
-            ]} />
+            <SectionHead title="Most Dispensed" sub="Units dispensed per product — from dispensed prescriptions" />
+            {(() => {
+              const soldMap = new Map<string, number>();
+              db.rxOrders.filter((r) => r.status === "dispensed").forEach((r) =>
+                r.items.forEach((i) => soldMap.set(i.name, (soldMap.get(i.name) ?? 0) + i.qty))
+              );
+              const items = [...soldMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)
+                .map(([label, value], i) => ({ label, value, color: ["#0e7a63", "#1d6fb8", "#b45309", "#0f766e", "#be123c", "#155e75"][i % 6] }));
+              return items.length
+                ? <HBars items={items} />
+                : <Empty icon={<IPill size={24} />} title="Nothing dispensed yet" sub="Sales appear here the moment the pharmacy dispenses a prescription." />;
+            })()}
           </Card>
           <Card className="p-4">
-            <SectionHead title="Pharmacy Revenue" sub="Dispensing value, last 7 days (GH₵)" />
-            <HBars items={[
-              { label: "Mon", value: 1240 }, { label: "Tue", value: 980 }, { label: "Wed", value: 1510 },
-              { label: "Thu", value: 1105 }, { label: "Fri", value: 1780 }, { label: "Sat", value: 890 }, { label: "Sun", value: 620 },
-            ]} />
-            <p className="mt-3 flex items-center gap-2 rounded-lg bg-med-50 px-3 py-2 text-[11px] font-semibold text-med-800">
-              <ITruck size={14} /> Purchase records: 3 POs open with Zuellig Pharma & Mediphar Ghana — next delivery Friday.
-            </p>
+            <SectionHead title="Pharmacy Revenue" sub="Dispensing value on invoices, last 7 days (GH₵)" />
+            {(() => {
+              const days = Array.from({ length: 7 }, (_, i) => dISO(i - 6));
+              const items = days.map((d) => ({
+                label: fmtShort(d),
+                value: Math.round(
+                  db.invoices.filter((inv) => inv.date === d)
+                    .flatMap((inv) => inv.items).filter((it) => it.kind === "pharmacy")
+                    .reduce((s, it) => s + it.amount, 0)
+                ),
+              }));
+              return items.some((x) => x.value > 0)
+                ? <HBars items={items} />
+                : <Empty icon={<IReceipt size={24} />} title="No dispensing revenue yet" sub="Pharmacy charges added to bills show up here day by day." />;
+            })()}
+            {expired.length > 0 && (
+              <p className="mt-3 flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-[11px] font-semibold text-red-800">
+                <IAlert size={14} /> {expired.length} product(s) past expiry — quarantine and raise a return with the supplier.
+              </p>
+            )}
           </Card>
         </div>
       )}
 
       {dispenseFor && <DispenseModal rx={dispenseFor} onClose={() => setDispenseFor(null)} />}
       {restockFor && <RestockModal medId={restockFor} onClose={() => setRestockFor(null)} />}
+      {addMed && <AddMedicineModal onClose={() => setAddMed(false)} />}
     </div>
+  );
+}
+
+function AddMedicineModal({ onClose }: { onClose: () => void }) {
+  const { mutate, toast } = useStore();
+  const [f, setF] = useState({
+    name: "", category: "Antibiotic", batch: "", supplier: "", stock: "0", unit: "tabs",
+    buyPrice: "0", sellPrice: "0", expiry: dISO(180), location: "Shelf A1", reorderLevel: "50",
+  });
+  const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
+  const save = () => {
+    if (!f.name.trim()) {
+      toast("Enter a medicine name", "danger");
+      return;
+    }
+    mutate(
+      (d) => {
+        d.medicines.unshift({
+          id: nid("M", d.medicines.map((m) => m.id)),
+          name: f.name.trim(), category: f.category, batch: f.batch || "—", supplier: f.supplier || "—",
+          stock: parseInt(f.stock) || 0, unit: f.unit, buyPrice: parseFloat(f.buyPrice) || 0,
+          sellPrice: parseFloat(f.sellPrice) || 0, expiry: f.expiry, location: f.location,
+          reorderLevel: parseInt(f.reorderLevel) || 0,
+        });
+      },
+      { audit: `Added medicine ${f.name.trim()} to pharmacy stock`, notify: { text: `New medicine in stock: ${f.name.trim()}`, icon: "stock", roles: ["admin", "pharmacist"] } }
+    );
+    toast(`${f.name.trim()} added to pharmacy stock`, "ok");
+    onClose();
+  };
+  return (
+    <Modal title="Add Medicine" sub="New stock line — available for dispensing immediately" onClose={onClose} w="max-w-lg"
+      footer={<><Btn variant="ghost" onClick={onClose}>Cancel</Btn><Btn onClick={save}><IPlus size={14} /> Add medicine</Btn></>}>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Medicine name *" className="col-span-2"><Input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Amoxicillin 500mg" /></Field>
+        <Field label="Category">
+          <Select value={f.category} onChange={(e) => set("category", e.target.value)}>
+            {["Antibiotic", "Analgesic", "Antimalarial", "Antihypertensive", "Antidiabetic", "NSAID", "PPI", "Respiratory", "Supplement", "Other"].map((c) => <option key={c}>{c}</option>)}
+          </Select>
+        </Field>
+        <Field label="Unit"><Input value={f.unit} onChange={(e) => set("unit", e.target.value)} placeholder="tabs / caps / vials" /></Field>
+        <Field label="Batch no."><Input value={f.batch} onChange={(e) => set("batch", e.target.value)} /></Field>
+        <Field label="Supplier"><Input value={f.supplier} onChange={(e) => set("supplier", e.target.value)} /></Field>
+        <Field label="Opening stock"><Input type="number" value={f.stock} onChange={(e) => set("stock", e.target.value)} /></Field>
+        <Field label="Reorder level"><Input type="number" value={f.reorderLevel} onChange={(e) => set("reorderLevel", e.target.value)} /></Field>
+        <Field label="Buy price (GH₵)"><Input type="number" step="0.01" value={f.buyPrice} onChange={(e) => set("buyPrice", e.target.value)} /></Field>
+        <Field label="Sell price (GH₵)"><Input type="number" step="0.01" value={f.sellPrice} onChange={(e) => set("sellPrice", e.target.value)} /></Field>
+        <Field label="Expiry date"><Input type="date" value={f.expiry} onChange={(e) => set("expiry", e.target.value)} /></Field>
+        <Field label="Storage location"><Input value={f.location} onChange={(e) => set("location", e.target.value)} /></Field>
+      </div>
+    </Modal>
   );
 }
 
@@ -271,6 +347,7 @@ export function InventoryView() {
   const { db, mutate, toast } = useStore();
   const [restockFor, setRestockFor] = useState<string | null>(null);
   const [qty, setQty] = useState("50");
+  const [addInv, setAddInv] = useState(false);
 
   const lowItems = db.inventory.filter((i) => i.stock <= i.reorderLevel);
 
@@ -300,7 +377,10 @@ export function InventoryView() {
           <h1 className="font-display text-lg font-extrabold text-ink">General Inventory</h1>
           <p className="text-xs text-ink-faint">Consumables, PPE, lab supplies and linen — low-stock alerts raised automatically</p>
         </div>
-        <Badge tone="warn"><IAlert size={11} /> {lowItems.length} item(s) at or below reorder level</Badge>
+        <div className="flex items-center gap-2">
+          {lowItems.length > 0 && <Badge tone="warn"><IAlert size={11} /> {lowItems.length} low</Badge>}
+          <Btn onClick={() => setAddInv(true)}><IPlus size={14} /> Add item</Btn>
+        </div>
       </div>
 
       {lowItems.length > 0 && (
@@ -313,6 +393,9 @@ export function InventoryView() {
         </div>
       )}
 
+      {db.inventory.length === 0 ? (
+        <Empty icon={<IBox size={26} />} title="No inventory items yet" sub="Add consumables, PPE and lab supplies to start tracking stock levels and low-stock alerts." />
+      ) : (
       <Card className="overflow-x-auto p-4">
         <table className="w-full min-w-[720px] text-left text-xs">
           <thead>
@@ -352,6 +435,7 @@ export function InventoryView() {
           </tbody>
         </table>
       </Card>
+      )}
 
       {restockFor && (
         <Modal title={`Restock — ${db.inventory.find((x) => x.id === restockFor)?.name}`} onClose={() => setRestockFor(null)} w="max-w-sm"
@@ -359,6 +443,50 @@ export function InventoryView() {
           <Field label="Quantity received"><Input type="number" value={qty} onChange={(e) => setQty(e.target.value)} /></Field>
         </Modal>
       )}
+
+      {addInv && <AddInventoryModal onClose={() => setAddInv(false)} />}
     </div>
+  );
+}
+
+function AddInventoryModal({ onClose }: { onClose: () => void }) {
+  const { db, mutate, toast } = useStore();
+  const [f, setF] = useState({ name: "", category: "Consumables", stock: "0", unit: "pcs", reorderLevel: "20", location: "Store 1" });
+  const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
+  const save = () => {
+    if (!f.name.trim()) {
+      toast("Enter an item name", "danger");
+      return;
+    }
+    mutate(
+      (d) => {
+        d.inventory.unshift({
+          id: nid("INV", d.inventory.map((i) => i.id)),
+          name: f.name.trim(), category: f.category, stock: parseInt(f.stock) || 0, unit: f.unit,
+          reorderLevel: parseInt(f.reorderLevel) || 0, location: f.location, lastRestocked: todayISO(),
+        });
+      },
+      { audit: `Added inventory item ${f.name.trim()}` }
+    );
+    toast(`${f.name.trim()} added to inventory`, "ok");
+    onClose();
+  };
+  return (
+    <Modal title="Add Inventory Item" sub="Consumables, PPE, lab supplies and linen" onClose={onClose} w="max-w-md"
+      footer={<><Btn variant="ghost" onClick={onClose}>Cancel</Btn><Btn onClick={save}><IPlus size={14} /> Add item</Btn></>}>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Item name *" className="col-span-2"><Input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Surgical Gloves (M)" /></Field>
+        <Field label="Category">
+          <Select value={f.category} onChange={(e) => set("category", e.target.value)}>
+            {["Consumables", "PPE", "Lab Supplies", "Linen", "Stationery", "Equipment"].map((c) => <option key={c}>{c}</option>)}
+          </Select>
+        </Field>
+        <Field label="Unit"><Input value={f.unit} onChange={(e) => set("unit", e.target.value)} placeholder="pcs / boxes / pairs" /></Field>
+        <Field label="Opening stock"><Input type="number" value={f.stock} onChange={(e) => set("stock", e.target.value)} /></Field>
+        <Field label="Reorder level"><Input type="number" value={f.reorderLevel} onChange={(e) => set("reorderLevel", e.target.value)} /></Field>
+        <Field label="Location" className="col-span-2"><Input value={f.location} onChange={(e) => set("location", e.target.value)} /></Field>
+      </div>
+      <p className="mt-2 text-[10.5px] text-ink-faint">Currently {db.inventory.length} item(s) tracked. A low-stock alert fires when stock reaches the reorder level.</p>
+    </Modal>
   );
 }

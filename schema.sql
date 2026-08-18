@@ -55,12 +55,14 @@ create table if not exists staff (
   "dept"      text,
   "title"     text,
   "phone"     text,
+  "email"     text,                   -- links the record to the Supabase Auth user
   "status"    text not null default 'off-duty',   -- on-duty|off-duty|on-leave
   "room"      text,
   "specialty" text,
   "schedule"  jsonb not null default '[]',
   "active"    boolean not null default true
 );
+create unique index if not exists idx_staff_email on staff (lower("email"));
 
 
 -- ------------------------------------------------------------
@@ -395,7 +397,13 @@ end $$;
 -- ============================================================
 -- FIRST RUN
 -- 1. Run this file in the SQL editor.
--- 2. Open MediCore HMS -> Settings -> Database -> paste your
---    Project URL -> "Connect & test". A fresh project is seeded
---    automatically from the first connected device.
+-- 2. Open MediCore HMS -> paste your Project URL on the sign-in
+--    screen (or Settings -> Database) -> "Connect & test".
+-- 3. Create staff accounts under Authentication -> Users. Give
+--    each user metadata so the app knows who they are, e.g.:
+--        { "name": "Dr. Ama Owusu", "role": "doctor",
+--          "staffId": "D-02", "dept": "Internal Medicine" }
+--    Valid roles: admin, doctor, nurse, reception, lab,
+--    pharmacist, billing. A staff record is provisioned
+--    automatically on the user's first sign-in.
 -- ============================================================

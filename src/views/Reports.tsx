@@ -12,9 +12,20 @@ export default function ReportsView() {
     toast(`${name} exported — ${rows.length - 1} rows`, "ok");
   };
 
-  const monthLabels = ["Sep", "Oct", "Nov", "Dec", "Jan", "Feb"];
-  const monthRevenue = [142500, 158300, 149900, 171200, 168400, 186900];
-  const monthPatients = [486, 522, 501, 566, 590, 641];
+  // last 6 calendar months, computed from live records
+  const now = new Date();
+  const months = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+    return {
+      label: d.toLocaleDateString("en-GB", { month: "short" }),
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+    };
+  });
+  const monthLabels = months.map((m) => m.label);
+  const monthRevenue = months.map((m) =>
+    Math.round(db.invoices.filter((inv) => inv.date.startsWith(m.key)).reduce((s, inv) => s + inv.paid, 0))
+  );
+  const monthPatients = months.map((m) => db.patients.filter((p) => p.registeredAt.startsWith(m.key)).length);
 
   const apptStats = [
     { label: "Completed", value: db.appointments.filter((a) => a.status === "completed").length, color: "#0e7a63" },
@@ -25,8 +36,26 @@ export default function ReportsView() {
 
   const labWorkload = Object.keys(LAB_CATALOG).map((k) => ({
     label: LAB_CATALOG[k].name,
-    value: db.labOrders.filter((o) => o.test === k).length + ({ CBC: 38, RBS: 29, MP: 52, UA: 18, LFT: 12, RFT: 15, LIPID: 9 }[k] ?? 0),
+    value: db.labOrders.filter((o) => o.test === k).length,
   })).sort((a, b) => b.value - a.value).slice(0, 5);
+
+  // assistive insights — computed from live records, empty-safe
+  const regLast7 = db.trends.registrations.slice(7).reduce((a, b) => a + b, 0);
+  const regPrev7 = db.trends.registrations.slice(0, 7).reduce((a, b) => a + b, 0);
+  const volumeText =
+    regLast7 === 0 && regPrev7 === 0
+      ? "No registrations yet. Volume trends appear here once the front desk starts registering patients."
+      : regPrev7 > 0
+        ? `Patient volume is ${regLast7 >= regPrev7 ? "up" : "down"} ${Math.abs(Math.round(((regLast7 - regPrev7) / regPrev7) * 100))}% week-on-week (${regLast7} vs ${regPrev7} registrations).`
+        : `${regLast7} patient registrations in the last 7 days.`;
+  const lowMeds = db.medicines.filter((m) => m.stock <= m.reorderLevel);
+  const inventoryText = lowMeds.length === 0
+    ? "All medicines are above their reorder levels. Low-stock forecasts will surface here as dispensing data accumulates."
+    : `${lowMeds.slice(0, 3).map((m) => m.name).join(", ")}${lowMeds.length > 3 ? ` and ${lowMeds.length - 3} more` : ""} at or below reorder level — raise purchase orders to avoid stock-outs.`;
+  const outstanding = db.invoices.reduce((s, i) => s + invBalance(i), 0);
+  const revenueText = outstanding > 0
+    ? `Outstanding balances total ${ghs(outstanding)} across ${db.invoices.filter((i) => invBalance(i) > 0).length} invoice(s). Reminding partial payers typically speeds recovery.`
+    : "No outstanding balances — every issued invoice is fully paid.";
 
   return (
     <div className="fade-up space-y-4">
@@ -117,9 +146,9 @@ export default function ReportsView() {
         <SectionHead title="AI Administrative Analytics" sub="Assistive insights generated from live hospital data — human decision-making always in the loop" />
         <div className="grid gap-2 md:grid-cols-3">
           {[
-            { t: "Volume trend", v: `Patient volume is up ${Math.round(((db.trends.registrations[13] - db.trends.registrations[0]) / db.trends.registrations[0]) * 100)}% over the last 14 days — consider extending OPD hours on Mondays.`, c: "border-med-200 bg-med-50/50 text-med-800" },
-            { t: "Predictive inventory", v: "At current dispensing rates, Artemether-Lumefantrine will run out in ~11 days and Salbutamol inhalers in ~6 days. Raise POs this week.", c: "border-amber-200 bg-amber-50 text-amber-900" },
-            { t: "Revenue insight", v: `Outstanding balances total ${ghs(db.invoices.reduce((s, i) => s + invBalance(i), 0))}. SMS reminders for partial payers historically recover ~62% within 7 days.`, c: "border-sky-200 bg-sky-50 text-sky-900" },
+            { t: "Volume trend", v: volumeText, c: "border-med-200 bg-med-50/50 text-med-800" },
+            { t: "Predictive inventory", v: inventoryText, c: "border-amber-200 bg-amber-50 text-amber-900" },
+            { t: "Revenue insight", v: revenueText, c: "border-sky-200 bg-sky-50 text-sky-900" },
           ].map((x) => (
             <div key={x.t} className={`rounded-xl border p-3.5 ${x.c}`}>
               <p className="font-display text-xs font-bold uppercase tracking-wide">{x.t}</p>

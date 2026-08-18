@@ -11,8 +11,8 @@
 
 import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { seedDB } from "./data";
-import type { DB } from "./data";
+import { ROLES } from "./data";
+import type { DB, Role } from "./data";
 
 const CFG_KEY = "medicore-sb-cfg";
 
@@ -83,7 +83,9 @@ export function getClient(): SupabaseClient | null {
   const cfg = getConfig();
   if (!cfg || !cfg.url || !cfg.key) return null;
   if (!client) {
-    client = createClient(cfg.url, cfg.key, { auth: { persistSession: false, autoRefreshToken: false } });
+    client = createClient(cfg.url, cfg.key, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+    });
   }
   return client;
 }
@@ -258,4 +260,96 @@ export async function pushAll(db: DB): Promise<void> {
   await pushTables(db, order);
 }
 
-export const demoDB = seedDB;
+/* ---------------- authentication (Supabase Auth) ---------------- */
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
+  staffId?: string;
+  dept?: string;
+  title?: string;
+  phone?: string;
+}
+
+interface SbUserLike {
+  id: string;
+  email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
+  app_metadata?: Record<string, unknown> | null;
+}
+
+/** Maps a Supabase Auth user to an HMS identity. The user's metadata
+ *  must carry a `role` (set by the administrator when creating the user):
+ *  { "name": "…", "role": "doctor", "staffId": "D-01", "dept": "…" } */
+function mapUser(u: SbUserLike): AuthUser | null {
+  const meta = { ...(u.app_metadata ?? {}), ...(u.user_metadata ?? {}) };
+  const roleRaw = String(meta.role ?? "").toLowerCase();
+  if (!ROLES.includes(roleRaw as Role)) return null;
+  const email = u.email ?? "";
+  const name = String(meta.name ?? meta.full_name ?? "").trim() || email.split("@")[0] || "Staff";
+  return {
+    id: u.id,
+    email,
+    name,
+    role: roleRaw as Role,
+    staffId: meta.staffId ? String(meta.staffId) : undefined,
+    dept: meta.dept ? String(meta.dept) : undefined,
+    title: meta.title ? String(meta.title) : undefined,
+    phone: meta.phone ? String(meta.phone) : undefined,
+  };
+}
+
+export async function authSignIn(
+  email: string,
+  password: string
+): Promise<{ ok: true; user: AuthUser } | { ok: false; error: string }> {
+  const sb = getClient();
+  if (!sb) return { ok: false, error: "No Supabase connection — paste your project URL below first." };
+  const { data, error } = await sb.auth.signInWithPassword({ email: email.trim(), password });
+  if (error || !data.user) {
+    const msg = error?.message ?? "Sign-in failed";
+    return { ok: false, error: /invalid login credentials/i.test(msg) ? "Invalid email or password." : msg };
+  }
+  const mapped = mapUser(data.user);
+  if (!mapped) {
+    await sb.auth.signOut().catch(() => undefined);
+    return {
+      ok: false,
+      error: "This account has no valid role assigned. The administrator must set user_metadata.role (admin, doctor, nurse, reception, lab, pharmacist or billing).",
+    };
+  }
+  return { ok: true, user: mapped };
+}
+
+export async function authGetSession(): Promise<AuthUser | null> {
+  const sb = getClient();
+  if (!sb) return null;
+  try {
+    const { data } = await sb.auth.getSession();
+    if (!data.session?.user) return null;
+    return mapUser(data.session.user);
+  } catch {
+    return null;
+  }
+}
+
+export function authOnChange(cb: (user: AuthUser | null) => void): () => void {
+  const sb = getClient();
+  if (!sb) return () => undefined;
+  const { data } = sb.auth.onAuthStateChange((_evt, session) => {
+    cb(session?.user ? mapUser(session.user) : null);
+  });
+  return () => data.subscription.unsubscribe();
+}
+
+export async function authSignOut(): Promise<void> {
+  const sb = getClient();
+  if (!sb) return;
+  try {
+    await sb.auth.signOut();
+  } catch {
+    /* best effort */
+  }
+}
