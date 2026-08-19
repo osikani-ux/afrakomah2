@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { StoreProvider, useStore } from "./store";
 import type { Nav } from "./store";
-import { hasConfig, maskedUrl, configuredUrl } from "./supabase";
 import { ROLE_META, timeAgo } from "./data";
 import type { Role, ViewId } from "./data";
 import { Avatar, Badge, Btn, EcgStrip } from "./ui";
@@ -72,7 +71,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
             <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-alert"><IAlert size={22} /></span>
             <h1 className="mt-3 font-display text-lg font-extrabold text-ink">MediCore hit a fault</h1>
             <p className="mt-1 text-xs leading-relaxed text-ink-soft">
-              The interface stopped unexpectedly. Your records are safe — they live in Supabase and this device's cache.
+              The interface stopped unexpectedly. Your records are safe — they're stored on this device.
             </p>
             <p className="mt-3 rounded-lg bg-paper/80 p-2.5 font-mono text-[10px] leading-relaxed text-ink-faint">{String(this.state.error)}</p>
             <button
@@ -100,68 +99,44 @@ export default function App() {
 }
 
 function Root() {
-  const { user, booting } = useStore();
+  const { user } = useStore();
   return (
     <>
-      {booting ? <BootSplash /> : user ? <Shell /> : <Login />}
+      {user ? <Shell /> : <Login />}
       <ToastHost />
     </>
   );
 }
 
-function BootSplash() {
-  return (
-    <div className="bg-clinical flex min-h-screen flex-col items-center justify-center">
-      <div className="relative w-[min(560px,90vw)] rounded-2xl border border-line bg-pine-950 p-8 text-center shadow-2xl">
-        <div className="bg-pine-grid absolute inset-0 rounded-2xl" />
-        <div className="relative">
-          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-mint/15 text-mint"><IPulse size={32} /></span>
-          <p className="mt-4 font-display text-xl font-extrabold text-white">MediCore HMS</p>
-          <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.22em] text-mint/80">Connecting to hospital database</p>
-          <div className="mt-5"><EcgStrip className="h-12 w-full" /></div>
-          <p className="mt-4 font-mono text-[10.5px] text-white/50">
-            {hasConfig() ? <>Supabase · {maskedUrl(configuredUrl())} · restoring secure session…</> : "Connecting…"}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ---------------- login ---------------- */
 
-function Login() {
-  const { signIn, connect } = useStore();
-  const connected = hasConfig();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [urlVal, setUrlVal] = useState("");
-  const [keyVal, setKeyVal] = useState("");
-  const [connBusy, setConnBusy] = useState(false);
-  const [connErr, setConnErr] = useState<{ error: string; hint?: string } | null>(null);
+const ROLE_ICON: Record<Role, React.ReactNode> = {
+  admin: <IGear size={17} />, doctor: <IStetho size={17} />, nurse: <IActivity size={17} />,
+  reception: <IUsers size={17} />, lab: <IFlask size={17} />, pharmacist: <IPill size={17} />, billing: <IReceipt size={17} />,
+};
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (busy) return;
-    setBusy(true);
-    setErr(null);
-    const error = await signIn(email, password);
-    setBusy(false);
-    if (error) setErr(error);
+function Login() {
+  const { db, login } = useStore();
+  const [role, setRole] = useState<Role>("admin");
+  const accounts = db.staff.filter((s) => s.role === role && s.active);
+  const [sel, setSel] = useState<string>("new");
+  const [name, setName] = useState("");
+
+  const pickRole = (r: Role) => {
+    setRole(r);
+    const acc = db.staff.filter((s) => s.role === r && s.active);
+    setSel(acc.length ? acc[0].id : "new");
   };
 
-  const doConnect = async () => {
-    if (!urlVal.trim()) {
-      setConnErr({ error: "Enter your Supabase project URL", hint: "Find it under Supabase → Project Settings → API." });
-      return;
+  const canGo = sel !== "new" || name.trim().length >= 2;
+
+  const submit = () => {
+    if (!canGo) return;
+    if (sel === "new") login(name, role);
+    else {
+      const s = accounts.find((a) => a.id === sel);
+      login(s?.name ?? name, role, sel);
     }
-    setConnBusy(true);
-    setConnErr(null);
-    const res = await connect(urlVal, keyVal);
-    setConnBusy(false);
-    if (!res.ok) setConnErr({ error: res.error ?? "Connection failed", hint: res.hint });
   };
 
   return (
@@ -207,78 +182,66 @@ function Login() {
             <p className="font-display text-lg font-extrabold">MediCore HMS</p>
           </div>
           <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-med-600">Staff workstation sign-in</p>
-          <h2 className="mt-1 font-display text-2xl font-extrabold text-ink">Sign in to your ward</h2>
-          <p className="mt-1 text-xs text-ink-faint">Authenticate with your hospital account — the system opens exactly the modules your role is authorised to use.</p>
+          <h2 className="mt-1 font-display text-2xl font-extrabold text-ink">Who's on duty?</h2>
+          <p className="mt-1 text-xs text-ink-faint">Pick your role — MediCore opens exactly the modules you're authorised to use.</p>
           <div className="mt-2">
-            {connected ? (
-              <span className="inline-flex items-center gap-2 rounded-lg border border-med-200 bg-med-50 px-2.5 py-1.5 text-[10.5px] font-bold text-med-800">
-                <span className="live-dot h-1.5 w-1.5 rounded-full bg-med-600" /> Supabase connected · {maskedUrl(configuredUrl())}
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10.5px] font-bold text-amber-900">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> No database connection — link your Supabase project below
-              </span>
-            )}
+            <span className="inline-flex items-center gap-2 rounded-lg border border-med-200 bg-med-50 px-2.5 py-1.5 text-[10.5px] font-bold text-med-800">
+              <span className="live-dot h-1.5 w-1.5 rounded-full bg-med-600" /> On-device data — works offline, nothing to install
+            </span>
           </div>
 
-          {!connected && (
-            <div className="mt-4 rounded-xl border border-med-200 bg-white p-4 shadow-sm">
-              <p className="flex items-center gap-2 font-display text-xs font-bold text-ink">
-                <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-med-600 text-white"><IGear size={13} /></span>
-                First-time setup — connect your Supabase project
-              </p>
-              <p className="mt-1.5 text-[10.5px] leading-snug text-ink-faint">
-                Paste the Project URL once (Supabase → Project Settings → API). The publishable key is already wired in; run <span className="font-mono">schema.sql</span> in the SQL editor first.
-              </p>
-              <div className="mt-2.5 space-y-2">
-                <input value={urlVal} onChange={(e) => setUrlVal(e.target.value)} placeholder="https://abcdefgh.supabase.co"
-                  className="w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs outline-none focus:border-med-500 focus:ring-2 focus:ring-med-500/15" />
-                <input value={keyVal} onChange={(e) => setKeyVal(e.target.value)} placeholder="Publishable key (optional — built-in key used if empty)"
-                  className="w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs outline-none focus:border-med-500 focus:ring-2 focus:ring-med-500/15" />
-              </div>
-              {connErr && (
-                <p className="mt-2 flex items-start gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[10.5px] font-semibold leading-snug text-red-800">
-                  <IAlert size={13} className="mt-0.5 shrink-0" /> {connErr.error}{connErr.hint ? ` — ${connErr.hint}` : ""}
-                </p>
-              )}
-              <button onClick={() => void doConnect()} disabled={connBusy}
-                className="mt-2.5 w-full rounded-lg bg-med-600 py-2 text-xs font-bold text-white transition-all hover:bg-med-700 active:scale-[0.99] disabled:opacity-50">
-                {connBusy ? <span className="inline-flex items-center gap-2"><IRefresh size={13} className="animate-spin" /> Testing connection…</span> : "Connect & test"}
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {(Object.keys(ROLE_META) as Role[]).map((r) => (
+              <button key={r} onClick={() => pickRole(r)}
+                className={`rounded-xl border-2 p-2.5 text-left transition-all ${role === r ? "border-med-600 bg-med-50 shadow-sm" : "border-line bg-white hover:border-med-300"}`}>
+                <span className={`inline-flex h-8 w-8 items-center justify-center rounded-lg ${role === r ? "bg-med-600 text-white" : "bg-line-soft text-ink-soft"}`}>{ROLE_ICON[r]}</span>
+                <p className="mt-1.5 text-[11px] font-bold leading-tight text-ink">{ROLE_META[r].label}</p>
+                <p className="text-[9px] text-ink-faint">{ROLE_META[r].blurb}</p>
               </button>
+            ))}
+            <div className="rounded-xl border-2 border-dashed border-line p-2.5">
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-line-soft text-ink-faint"><IShield size={17} /></span>
+              <p className="mt-1.5 text-[10.5px] font-bold leading-tight text-ink-soft">Role-based access</p>
+              <p className="text-[9px] text-ink-faint">Permissions enforced per module</p>
             </div>
-          )}
+          </div>
 
-          <form onSubmit={(e) => void submit(e)} className="mt-4 space-y-3">
-            <label className="block">
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Email address</span>
-              <input type="email" required autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@hospital.org"
-                className="w-full rounded-lg border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-med-500 focus:ring-2 focus:ring-med-500/15" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Password</span>
-              <input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••"
-                className="w-full rounded-lg border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-med-500 focus:ring-2 focus:ring-med-500/15" />
-            </label>
-            {err && (
-              <p className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] font-semibold leading-snug text-red-800">
-                <IAlert size={14} className="mt-0.5 shrink-0" /> {err}
-              </p>
+          <div className="mt-4 space-y-3">
+            {accounts.length > 0 && (
+              <div>
+                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Existing {ROLE_META[role].label.toLowerCase()} accounts</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {accounts.map((a) => (
+                    <button key={a.id} onClick={() => setSel(a.id)}
+                      className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-all ${sel === a.id ? "border-med-600 bg-med-600 text-white" : "border-line bg-white text-ink-soft hover:border-med-400"}`}>
+                      {a.name}
+                    </button>
+                  ))}
+                  <button onClick={() => setSel("new")}
+                    className={`rounded-lg border border-dashed px-2.5 py-1.5 text-[11px] font-semibold transition-all ${sel === "new" ? "border-med-600 bg-med-50 text-med-700" : "border-line text-ink-faint hover:border-med-300"}`}>
+                    + New
+                  </button>
+                </div>
+              </div>
             )}
-            <button type="submit" disabled={busy || !connected}
+            {sel === "new" && (
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Your full name</span>
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ama Owusu" autoFocus
+                  className="w-full rounded-lg border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-med-500 focus:ring-2 focus:ring-med-500/15" />
+              </label>
+            )}
+            <button onClick={submit} disabled={!canGo}
               className="w-full rounded-xl bg-pine-900 py-3 font-display text-sm font-bold text-mint transition-all hover:bg-pine-800 active:scale-[0.99] disabled:opacity-45">
-              {busy ? (
-                <span className="inline-flex items-center gap-2"><IRefresh size={15} className="animate-spin" /> Verifying credentials…</span>
-              ) : connected ? (
-                "Sign in securely →"
-              ) : (
-                "Connect the database to sign in"
-              )}
+              Clock in as {sel === "new" ? (name.trim() || `new ${ROLE_META[role].label.toLowerCase()}`) : accounts.find((a) => a.id === sel)?.name} →
             </button>
             <p className="text-center text-[10.5px] leading-relaxed text-ink-faint">
-              Accounts are provisioned by your administrator in <span className="font-semibold text-ink-soft">Supabase Auth</span> with a role
-              in the user metadata · Sessions auto-refresh · Every sign-in is audit-logged
+              {sel === "new"
+                ? `A ${ROLE_META[role].label.toLowerCase()} account is created on this device the first time you clock in.`
+                : "Switch people anytime by signing out."}{" "}
+              Every action is audit-logged.
             </p>
-          </form>
+          </div>
         </div>
       </div>
     </div>
@@ -288,7 +251,7 @@ function Login() {
 /* ---------------- shell ---------------- */
 
 function Shell() {
-  const { user, nav, go, signOut, sync } = useStore();
+  const { user, nav, go, logout } = useStore();
   const [drawer, setDrawer] = useState(false);
   const allowed = ACCESS[user?.role ?? "reception"];
   const view: ViewId = allowed.includes(nav.view) ? nav.view : "dashboard";
@@ -345,12 +308,9 @@ function Shell() {
         <div className="border-t border-white/10 p-3">
           <div className="mb-2 flex items-center justify-between rounded-lg bg-pine-900/70 px-2.5 py-1.5">
             <span className="flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-wider text-white/60">
-              <span className={`h-1.5 w-1.5 rounded-full ${sync.mode === "cloud" ? (sync.error ? "bg-amber-400" : "live-dot bg-mint") : "bg-amber-400"}`} />
-              {sync.mode === "cloud" ? "Supabase" : "Local"}
+              <span className="live-dot h-1.5 w-1.5 rounded-full bg-mint" /> On-device
             </span>
-            <span className="font-mono text-[9px] text-white/45">
-              {sync.syncing ? "syncing…" : sync.error ? "offline" : sync.lastSyncAt ? timeAgo(sync.lastSyncAt) : "—"}
-            </span>
+            <span className="font-mono text-[9px] text-white/45">saved locally</span>
           </div>
           <div className="flex items-center gap-2.5 rounded-xl bg-pine-900 p-2.5">
             <Avatar name={user?.name ?? "?"} size={32} />
@@ -358,7 +318,7 @@ function Shell() {
               <p className="truncate text-[11.5px] font-bold text-white">{user?.name}</p>
               <p className="truncate font-mono text-[9px] text-mint/80">{ROLE_META[user?.role ?? "admin"].label}</p>
             </div>
-            <button onClick={() => void signOut()} title="Sign out" className="rounded-lg p-1.5 text-white/50 transition-colors hover:bg-pine-800 hover:text-mint"><ILogout size={15} /></button>
+            <button onClick={logout} title="Sign out" className="rounded-lg p-1.5 text-white/50 transition-colors hover:bg-pine-800 hover:text-mint"><ILogout size={15} /></button>
           </div>
         </div>
       </aside>

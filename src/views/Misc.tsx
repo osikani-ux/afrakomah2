@@ -1,11 +1,9 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../store";
-import { hasConfig, maskedUrl, configuredUrl, configuredKey, BUILTIN_KEY, TABLES } from "../supabase";
-import schemaSql from "../../schema.sql?raw";
 import { timeAgo, fmtDate, fmtTime, todayISO, ROLE_META } from "../data";
 import type { Notif, Role } from "../data";
-import { Badge, Btn, Card, SectionHead, SearchBox, Tabs, Empty, downloadJSON, downloadText, Input, Select, Field, Modal } from "../ui";
-import { IBell, ICheck, IShield, IDownload, IRefresh, IAlert, IFlask, IPill, IBed, IReceipt, ICard, ICalendar, IActivity, IGear, IClipboard, IFile, IPlus, IUser } from "../icons";
+import { Badge, Btn, Card, SectionHead, SearchBox, Tabs, Empty, downloadJSON, Input, Select, Field, Modal } from "../ui";
+import { IBell, ICheck, IShield, IDownload, IRefresh, IAlert, IFlask, IPill, IBed, IReceipt, ICard, ICalendar, IActivity, IGear, IPlus, IUser, IList } from "../icons";
 
 const NICON: Record<Notif["icon"], React.ReactNode> = {
   appt: <ICalendar size={14} />, lab: <IFlask size={14} />, rx: <IPill size={14} />, stock: <IPill size={14} />,
@@ -71,42 +69,11 @@ export function NotificationsView() {
 }
 
 export function SettingsView() {
-  const { db, user, mutate, toast, sync, pullNow, seedCloud, connect, disconnect } = useStore();
+  const { db, user, mutate, toast } = useStore();
   const [auditQ, setAuditQ] = useState("");
   const [confirmReset, setConfirmReset] = useState(false);
   const [sessionMin, setSessionMin] = useState("30");
   const [provisionOpen, setProvisionOpen] = useState(false);
-  const [urlVal, setUrlVal] = useState(configuredUrl());
-  const [keyVal, setKeyVal] = useState(configuredKey());
-  const [connecting, setConnecting] = useState(false);
-  const [connErr, setConnErr] = useState<{ error: string; hint?: string } | null>(null);
-
-  const doConnect = async () => {
-    if (!urlVal.trim()) {
-      setConnErr({ error: "Enter your Supabase project URL", hint: "Find it under Supabase → Project Settings → API." });
-      return;
-    }
-    setConnecting(true);
-    setConnErr(null);
-    const res = await connect(urlVal, keyVal);
-    setConnecting(false);
-    if (!res.ok) setConnErr({ error: res.error ?? "Connection failed", hint: res.hint });
-    else {
-      setUrlVal(configuredUrl());
-      setKeyVal(configuredKey());
-    }
-  };
-
-  const copySchema = async () => {
-    try {
-      await navigator.clipboard.writeText(schemaSql);
-      toast(`schema.sql copied — ${schemaSql.split("\n").length} lines · paste into the Supabase SQL editor`, "ok");
-      mutate(() => {}, { audit: "Copied schema.sql to clipboard" });
-    } catch {
-      downloadText("schema.sql", schemaSql);
-      toast("Clipboard blocked by browser — schema.sql downloaded instead", "warn");
-    }
-  };
 
   const audit = useMemo(
     () => db.audit.filter((a) => !auditQ.trim() || (a.user + a.action).toLowerCase().includes(auditQ.toLowerCase())),
@@ -121,9 +88,11 @@ export function SettingsView() {
 
   const backup = () => {
     downloadJSON(`medicore-backup-${todayISO()}.json`, db);
-    toast("Encrypted backup downloaded (AES-256 at rest)", "ok");
+    toast("Backup downloaded — keep it somewhere safe", "ok");
     mutate(() => {}, { audit: "Generated full database backup" });
   };
+
+  const records = db.patients.length + db.appointments.length + db.labOrders.length + db.invoices.length + db.audit.length;
 
   return (
     <div className="fade-up space-y-4">
@@ -132,121 +101,46 @@ export function SettingsView() {
         <p className="text-xs text-ink-faint">Accounts, permissions, audit trail and data management — admin only</p>
       </div>
 
-      {/* database connection */}
-      <Card className={`overflow-hidden ${sync.mode === "cloud" && !sync.error ? "border-med-300" : ""}`}>
+      {/* data storage */}
+      <Card className="overflow-hidden">
         <div className="grid gap-0 md:grid-cols-[1.25fr_1fr]">
           <div className="p-4">
             <SectionHead
-              title="Database Connection"
-              sub={hasConfig() ? "PostgreSQL via Supabase — every change syncs automatically" : "Publishable key detected — paste your project URL to go live"}
-              right={
-                sync.mode === "cloud" ? (
-                  sync.error ? <Badge tone="warn"><IAlert size={10} /> Reaching local cache</Badge> : <Badge tone="ok"><span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-500" /> Live sync</Badge>
-                ) : (
-                  <Badge tone="warn">Local demo mode</Badge>
-                )
-              }
+              title="Data Storage"
+              sub="Everything lives on this device — no server, no account, works fully offline"
+              right={<Badge tone="ok"><span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-500" /> Saved locally</Badge>}
             />
-
-            {hasConfig() ? (
-              <>
-                <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-                  <div className="rounded-lg bg-paper/70 p-2.5">
-                    <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Endpoint</p>
-                    <p className="mt-0.5 truncate font-mono text-[11px] font-bold text-ink" title={configuredUrl()}>{maskedUrl(configuredUrl())}</p>
-                  </div>
-                  <div className="rounded-lg bg-paper/70 p-2.5">
-                    <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Tables</p>
-                    <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">{TABLES.length + 1} mapped</p>
-                  </div>
-                  <div className="rounded-lg bg-paper/70 p-2.5">
-                    <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Last sync</p>
-                    <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">{sync.syncing ? "syncing…" : sync.lastSyncAt ? timeAgo(sync.lastSyncAt) : "never"}</p>
-                  </div>
-                  <div className="rounded-lg bg-paper/70 p-2.5">
-                    <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Records</p>
-                    <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">{(db.patients.length + db.appointments.length + db.labOrders.length + db.invoices.length + db.audit.length).toLocaleString()} rows</p>
-                  </div>
-                </div>
-                {sync.error && (
-                  <p className="mt-2.5 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-900">
-                    <IAlert size={13} className="mt-0.5 shrink-0" />
-                    <span>Cloud unreachable — “{sync.error}”. Work continues on the local cache and syncs will retry on the next change.</span>
-                  </p>
-                )}
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Btn onClick={() => void pullNow()} disabled={sync.syncing}><IRefresh size={13} /> Pull latest from cloud</Btn>
-                  <Btn variant="outline" onClick={() => void seedCloud()} disabled={sync.syncing}><IDownload size={13} /> Seed cloud from this device</Btn>
-                  <Btn variant="ghost" onClick={backup}><IDownload size={13} /> JSON backup</Btn>
-                  <span className="mx-0.5 hidden h-4 w-px bg-line sm:block" />
-                  <Btn variant="soft" onClick={() => void copySchema()}><IClipboard size={13} /> Copy schema</Btn>
-                  <Btn variant="ghost" onClick={() => { downloadText("schema.sql", schemaSql); toast("schema.sql downloaded", "ok"); }}><IFile size={13} /> schema.sql</Btn>
-                  <span className="mx-0.5 hidden h-4 w-px bg-line sm:block" />
-                  <Btn variant="ghost" className="text-alert hover:bg-red-50" onClick={() => { disconnect(); setUrlVal(""); }}><IAlert size={12} /> Disconnect</Btn>
-                </div>
-              </>
-            ) : (
-              <div className="space-y-2.5">
-                <label className="block">
-                  <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wide text-ink-faint">Project URL</span>
-                  <input
-                    value={urlVal}
-                    onChange={(e) => { setUrlVal(e.target.value); setConnErr(null); }}
-                    placeholder="https://abcdefgh.supabase.co"
-                    className="w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs outline-none transition-colors placeholder:text-ink-faint/60 focus:border-med-500 focus:ring-2 focus:ring-med-500/15"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-wide text-ink-faint">
-                    Publishable key <span className="font-mono text-[9px] normal-case tracking-normal text-med-600">pre-filled · leave as-is</span>
-                  </span>
-                  <input
-                    value={keyVal}
-                    onChange={(e) => setKeyVal(e.target.value)}
-                    placeholder={BUILTIN_KEY}
-                    className="w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs outline-none transition-colors placeholder:text-ink-faint/60 focus:border-med-500 focus:ring-2 focus:ring-med-500/15"
-                  />
-                </label>
-                {connErr && (
-                  <p className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-semibold text-red-800">
-                    <IAlert size={13} className="mt-0.5 shrink-0" />
-                    <span>{connErr.error}{connErr.hint ? <span className="block font-medium text-red-700/80">{connErr.hint}</span> : null}</span>
-                  </p>
-                )}
-                <div className="flex flex-wrap gap-2">
-                  <Btn size="md" onClick={() => void doConnect()} disabled={connecting}>
-                    {connecting ? (
-                      <span className="flex items-center gap-2"><IRefresh size={13} className="animate-spin" /> Testing connection…</span>
-                    ) : (
-                      <span className="flex items-center gap-2"><ICheck size={14} /> Connect & test</span>
-                    )}
-                  </Btn>
-                  <Btn variant="ghost" onClick={backup}><IDownload size={13} /> JSON backup</Btn>
-                  <span className="mx-0.5 hidden h-4 w-px bg-line sm:block" />
-                  <Btn variant="soft" onClick={() => void copySchema()}><IClipboard size={13} /> Copy schema</Btn>
-                  <Btn variant="ghost" onClick={() => { downloadText("schema.sql", schemaSql); toast("schema.sql downloaded", "ok"); }}><IFile size={13} /> schema.sql</Btn>
-                </div>
-                <p className="text-[10.5px] leading-snug text-ink-faint">
-                  Connecting verifies the schema, then seeds a fresh project from this device — or merges existing cloud records. You can also set <span className="font-mono">VITE_SUPABASE_URL</span> in <span className="font-mono">.env</span>.
-                </p>
+            <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+              <div className="rounded-lg bg-paper/70 p-2.5">
+                <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Storage</p>
+                <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">This browser</p>
               </div>
-            )}
+              <div className="rounded-lg bg-paper/70 p-2.5">
+                <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Records</p>
+                <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">{records.toLocaleString()} rows</p>
+              </div>
+              <div className="rounded-lg bg-paper/70 p-2.5">
+                <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Staff accounts</p>
+                <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">{db.staff.length}</p>
+              </div>
+              <div className="rounded-lg bg-paper/70 p-2.5">
+                <p className="text-[9.5px] font-semibold uppercase tracking-wide text-ink-faint">Beds</p>
+                <p className="mt-0.5 font-mono text-[11px] font-bold text-ink">{db.beds.length}</p>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Btn onClick={backup}><IDownload size={13} /> Download backup (JSON)</Btn>
+              <Btn variant="ghost" className="text-alert hover:bg-red-50" onClick={() => setConfirmReset(true)}><IRefresh size={12} /> Reset this device</Btn>
+            </div>
           </div>
           <div className="border-t border-line-soft bg-pine-950 p-4 text-white md:border-l md:border-t-0">
-            <p className="font-mono text-[9.5px] font-semibold uppercase tracking-[0.2em] text-mint">Go live in 3 steps</p>
-            <ol className="mt-2.5 space-y-2 text-[11px] leading-snug text-white/75">
-              <li className="flex gap-2"><span className="font-mono font-bold text-mint">1.</span> Run the schema in the SQL editor — hit <span className="font-semibold text-mint">Copy schema</span> below, or use <span className="rounded bg-white/10 px-1 font-mono text-[10px] text-mint">schema.sql</span> from the repo root. 18 tables, indexes and policies.</li>
-              <li className="flex gap-2"><span className="font-mono font-bold text-mint">2.</span> Paste the Project URL on the left and hit <span className="font-semibold text-mint">Connect & test</span>. The publishable key is already wired in.</li>
-              <li className="flex gap-2"><span className="font-mono font-bold text-mint">3.</span> Create staff under <span className="font-semibold text-mint">Authentication → Users</span> with metadata <span className="rounded bg-white/10 px-1 font-mono text-[9px] text-mint">{"{ \"name\": …, \"role\": … }"}</span> — roles: admin, doctor, nurse, reception, lab, pharmacist, billing.</li>
-            </ol>
-            <div className="mt-3 space-y-1.5">
-              <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-white/40">What happens next</p>
-              <ul className="space-y-1 text-[10.5px] text-white/65">
-                <li className="flex gap-1.5"><span className="text-mint">▸</span> Each user's staff record is provisioned automatically on first sign-in</li>
-                <li className="flex gap-1.5"><span className="text-mint">▸</span> Every ward, lab, pharmacy and billing change upserts to Postgres within a second</li>
-                <li className="flex gap-1.5"><span className="text-mint">▸</span> Deactivating an account here blocks that user's next sign-in</li>
-              </ul>
-            </div>
+            <p className="font-mono text-[9.5px] font-semibold uppercase tracking-[0.2em] text-mint">How it works</p>
+            <ul className="mt-2.5 space-y-1.5 text-[10.5px] text-white/65">
+              <li className="flex gap-1.5"><span className="text-mint">▸</span> Records are written to this browser the moment you save — nothing leaves the device</li>
+              <li className="flex gap-1.5"><span className="text-mint">▸</span> Sign in as any role from the workstation screen; switch people by signing out</li>
+              <li className="flex gap-1.5"><span className="text-mint">▸</span> Download a JSON backup before clearing site data or moving machines</li>
+              <li className="flex gap-1.5"><span className="text-mint">▸</span> The audit trail records every sensitive action with who and when</li>
+            </ul>
           </div>
         </div>
       </Card>
@@ -256,7 +150,7 @@ export function SettingsView() {
           <Card className="p-4">
             <SectionHead
               title="User Accounts & Roles"
-              sub={`${db.staff.filter((s) => s.active).length} active of ${db.staff.length} — deactivated accounts cannot sign in`}
+              sub={`${db.staff.filter((s) => s.active).length} active of ${db.staff.length} — deactivated accounts can't clock in`}
               right={<Btn onClick={() => setProvisionOpen(true)}><IPlus size={13} /> Create account</Btn>}
             />
             <div className="max-h-[340px] divide-y divide-line-soft/70 overflow-y-auto">
@@ -266,7 +160,7 @@ export function SettingsView() {
                     <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-pine-900 font-mono text-[10px] font-bold text-mint">{s.id}</span>
                     <div>
                       <p className="text-xs font-bold text-ink">{s.name}</p>
-                      <p className="text-[10px] text-ink-faint">{s.title} · {s.dept}{s.email ? <> · <span className="font-mono text-[9.5px]">{s.email}</span></> : null}</p>
+                      <p className="text-[10px] text-ink-faint">{s.title} · {s.dept}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -277,6 +171,7 @@ export function SettingsView() {
                   </div>
                 </div>
               ))}
+              {db.staff.length === 0 && <p className="py-6 text-center text-xs text-ink-faint">No accounts yet — create the first one.</p>}
             </div>
           </Card>
 
@@ -302,7 +197,7 @@ export function SettingsView() {
           <Card className="p-4">
             <SectionHead title="Hospital Profile" />
             <div className="space-y-1.5 text-xs">
-              {[["Facility", "MediCore General Hospital"], ["Location", "14 Independence Ave, Accra"], ["License", "GHA-HF-2214-A"], ["Beds", "24 across 4 wards"], ["Departments", "13 connected modules"], ["System", "MediCore HMS v3.2"]].map(([k, v]) => (
+              {[["Facility", "MediCore General Hospital"], ["Location", "14 Independence Ave, Accra"], ["License", "GHA-HF-2214-A"], ["Beds", `${db.beds.length} across 4 wards`], ["Departments", "13 connected modules"], ["System", "MediCore HMS · on-device"]].map(([k, v]) => (
                 <p key={k} className="flex justify-between gap-3"><span className="text-ink-faint">{k}</span><span className="font-semibold text-ink">{v}</span></p>
               ))}
             </div>
@@ -311,15 +206,15 @@ export function SettingsView() {
           <Card className="p-4">
             <SectionHead title="Security Controls" right={<Badge tone="ok"><ICheck size={10} /> Enforced</Badge>} />
             <ul className="space-y-2 text-[11.5px] text-ink-soft">
-              {["Role-based access control on every module & action", "Password hashing (bcrypt, salted) — never stored plain", "Automatic session logout", "Data encrypted at rest (AES-256) and in transit (TLS 1.3)", "Daily off-site encrypted backups", "Complete, tamper-evident audit trail", "Pharmacists cannot edit diagnoses; reception cannot alter lab results"].map((x) => (
+              {["Role-based access control on every module & action", "On-device storage — records never leave this machine", "Automatic session sign-out", "Complete, tamper-evident audit trail", "Pharmacists cannot edit diagnoses; reception cannot alter lab results"].map((x) => (
                 <li key={x} className="flex items-start gap-2"><IShield size={13} className="mt-0.5 shrink-0 text-med-600" />{x}</li>
               ))}
             </ul>
             <div className="mt-3 rounded-lg bg-paper/70 p-3">
-              <p className="text-[11px] font-semibold text-ink-soft">Auto-logout after</p>
+              <p className="text-[11px] font-semibold text-ink-soft">Auto sign-out after</p>
               <div className="mt-1.5 flex gap-1.5">
                 {["15", "30", "60"].map((m) => (
-                  <button key={m} onClick={() => { setSessionMin(m); toast(`Idle logout set to ${m} minutes`, "info"); }} className={`rounded-lg border px-3 py-1 font-mono text-[11px] font-bold transition-all ${sessionMin === m ? "border-med-600 bg-med-600 text-white" : "border-line bg-white text-ink-soft"}`}>{m}m</button>
+                  <button key={m} onClick={() => { setSessionMin(m); toast(`Idle sign-out set to ${m} minutes`, "info"); }} className={`rounded-lg border px-3 py-1 font-mono text-[11px] font-bold transition-all ${sessionMin === m ? "border-med-600 bg-med-600 text-white" : "border-line bg-white text-ink-soft"}`}>{m}m</button>
                 ))}
               </div>
             </div>
@@ -329,9 +224,9 @@ export function SettingsView() {
             <SectionHead title="Data Management" />
             <div className="space-y-2">
               <Btn variant="soft" className="w-full justify-center" onClick={backup}><IDownload size={14} /> Download backup (JSON)</Btn>
-              <Btn variant="danger" className="w-full justify-center" onClick={() => setConfirmReset(true)}><IRefresh size={14} /> Reset local copy</Btn>
+              <Btn variant="danger" className="w-full justify-center" onClick={() => setConfirmReset(true)}><IRefresh size={14} /> Reset this device</Btn>
             </div>
-            <p className="mt-2 flex items-center gap-1.5 text-[10.5px] text-ink-faint"><IGear size={11} /> Clears this device's cache — the next boot re-syncs from Supabase.</p>
+            <p className="mt-2 flex items-center gap-1.5 text-[10.5px] text-ink-faint"><IGear size={11} /> Clears all local records and accounts, then starts fresh.</p>
           </Card>
         </div>
       </div>
@@ -342,10 +237,10 @@ export function SettingsView() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-pine-950/55 p-4" onMouseDown={() => setConfirmReset(false)}>
           <div className="pop-in w-full max-w-sm rounded-2xl border border-line bg-white p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
             <p className="font-display text-sm font-bold text-ink">Reset this device?</p>
-            <p className="mt-1 text-xs text-ink-faint">Clears the local working copy so the next boot re-hydrates from Supabase. Cloud data and Auth users are not touched.</p>
+            <p className="mt-1 text-xs text-ink-faint">Every record and account on this device will be erased and the hospital starts empty. Download a backup first if you need one.</p>
             <div className="mt-4 flex justify-end gap-2">
               <Btn variant="ghost" onClick={() => setConfirmReset(false)}>Keep my data</Btn>
-              <Btn variant="danger" onClick={() => { localStorage.removeItem("medicore-db-v4"); localStorage.removeItem("medicore-user-v3"); location.reload(); }}>
+              <Btn variant="danger" onClick={() => { localStorage.removeItem("medicore-db-v4"); localStorage.removeItem("medicore-user-v4"); location.reload(); }}>
                 <IRefresh size={13} /> Yes, reset
               </Btn>
             </div>
@@ -359,63 +254,43 @@ export function SettingsView() {
 /* ---------------- provision staff account (admin) ---------------- */
 
 function ProvisionAccountModal({ onClose }: { onClose: () => void }) {
-  const { createAccount, toast } = useStore();
-  const [f, setF] = useState({ name: "", email: "", password: "", role: "doctor" as Role, dept: "", title: "", phone: "", staffId: "" });
-  const [busy, setBusy] = useState(false);
+  const { createAccount } = useStore();
+  const [f, setF] = useState({ name: "", role: "doctor" as Role, dept: "", title: "", phone: "" });
   const [err, setErr] = useState<string | null>(null);
   const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
 
-  const submit = async () => {
-    if (!f.name.trim() || !f.email.trim() || !f.password) {
-      setErr("Name, email and password are required.");
+  const submit = () => {
+    if (!f.name.trim()) {
+      setErr("A full name is required.");
       return;
     }
-    setBusy(true);
-    setErr(null);
-    const res = await createAccount({
-      name: f.name, email: f.email, password: f.password, role: f.role,
+    createAccount({
+      name: f.name, role: f.role,
       dept: f.dept || undefined, title: f.title || undefined, phone: f.phone || undefined,
-      staffId: f.staffId || undefined,
     });
-    setBusy(false);
-    if (res.error) {
-      setErr(res.error);
-      return;
-    }
-    toast(
-      res.needsConfirm
-        ? `Account created — ${f.name} must confirm their email before first sign-in`
-        : `Account created — ${f.name} can sign in now with their password`,
-      "ok"
-    );
     onClose();
   };
 
   return (
     <Modal
       title="Create Staff Account"
-      sub="Creates a Supabase Auth login with the HMS role embedded — the staff record is added automatically"
+      sub="Adds a sign-in for this role on the workstation screen"
       onClose={onClose}
       w="max-w-lg"
       footer={
         <>
           <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={() => void submit()} disabled={busy}>
-            {busy ? <IRefresh size={13} className="animate-spin" /> : <IUser size={13} />} {busy ? "Creating…" : "Create account"}
-          </Btn>
+          <Btn onClick={submit}><IUser size={13} /> Create account</Btn>
         </>
       }
     >
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Full name *"><Input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Dr. Ama Owusu" /></Field>
+        <Field label="Full name *" className="col-span-2"><Input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Dr. Ama Owusu" autoFocus /></Field>
         <Field label="Role *">
           <Select value={f.role} onChange={(e) => set("role", e.target.value)}>
             {(Object.keys(ROLE_META) as Role[]).map((r) => <option key={r} value={r}>{ROLE_META[r].label}</option>)}
           </Select>
         </Field>
-        <Field label="Email (login) *" className="col-span-2"><Input type="email" value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="name@hospital.org" /></Field>
-        <Field label="Temporary password *"><Input value={f.password} onChange={(e) => set("password", e.target.value)} placeholder="min. 6 characters" /></Field>
-        <Field label="Staff ID (optional)"><Input value={f.staffId} onChange={(e) => set("staffId", e.target.value)} placeholder="auto if empty" /></Field>
         <Field label="Department"><Input value={f.dept} onChange={(e) => set("dept", e.target.value)} placeholder="e.g. Paediatrics" /></Field>
         <Field label="Job title"><Input value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. Staff Nurse" /></Field>
         <Field label="Phone"><Input value={f.phone} onChange={(e) => set("phone", e.target.value)} placeholder="024 …" /></Field>
@@ -426,9 +301,7 @@ function ProvisionAccountModal({ onClose }: { onClose: () => void }) {
         </p>
       )}
       <p className="mt-3 rounded-lg bg-paper/70 px-3 py-2 text-[10.5px] leading-relaxed text-ink-faint">
-        They sign in on any workstation with this email + password and land in their role's workspace.
-        If <span className="font-semibold text-ink-soft">Email Confirmation</span> is enabled in Supabase → Authentication, they confirm first
-        (turn it off for instant access).
+        <IList size={12} className="mr-1 inline" /> They clock in from the sign-in screen by picking this role and their name — the system opens only the modules their role allows.
       </p>
     </Modal>
   );
