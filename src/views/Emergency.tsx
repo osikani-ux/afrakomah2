@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore, nid, charge } from "../store";
-import { WARD_META, fmtTime, ghs, nowISO } from "../data";
+import { wardOf, fmtTime, ghs, nowISO } from "../data";
 import type { EmergencyCase, TriageLevel } from "../data";
 import { Badge, Btn, Card, Field, Input, Modal, Select, StatusPill, Textarea, Avatar } from "../ui";
 import { IZap, IPlus, IClock, ICheck, IBed, IStetho, IActivity } from "../icons";
@@ -48,7 +48,7 @@ export default function EmergencyView() {
       return;
     }
     const p = db.patients.find((x) => x.mrn === c.patientMrn);
-    const daily = WARD_META[free.ward].daily;
+    const daily = wardOf(db.wards, free.ward).daily;
     mutate(
       (d) => {
         const e = d.emergencies.find((x) => x.id === c.id)!;

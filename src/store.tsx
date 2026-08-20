@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { emptyDB, nowISO, todayISO, ROLE_META } from "./data";
+import { emptyDB, nowISO, todayISO, ROLE_META, WARD_META } from "./data";
 import type { DB, InvoiceItem, Notif, Role, Staff, ViewId } from "./data";
 
 /* ============================================================
@@ -53,15 +53,39 @@ interface StoreShape {
 const Ctx = createContext<StoreShape>(null!);
 export const useStore = () => useContext(Ctx);
 
-const DB_KEY = "medicore-db-v4";
+const DB_KEY = "medicore-db-v5";
+const LEGACY_KEY = "medicore-db-v4";
 const USER_KEY = "medicore-user-v4";
+
+/** v4 → v5: adds live ward configs (beds were previously fixed at seed time). */
+function migrateV4(d: DB): DB {
+  return {
+    ...d,
+    v: 5,
+    wards: (Object.keys(WARD_META) as (keyof typeof WARD_META)[]).map((w) => ({
+      id: w,
+      name: WARD_META[w].name.replace(/^Ward [A-Z] — /, ""),
+      daily: WARD_META[w].daily,
+    })),
+  };
+}
 
 function loadDB(): DB {
   try {
     const raw = localStorage.getItem(DB_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as DB;
-      if (parsed && parsed.v === 4) return parsed;
+      if (parsed && parsed.v === 5) return parsed;
+    }
+    const legacy = localStorage.getItem(LEGACY_KEY);
+    if (legacy) {
+      const parsed = JSON.parse(legacy) as DB;
+      if (parsed && parsed.v === 4) {
+        const migrated = migrateV4(parsed);
+        localStorage.setItem(DB_KEY, JSON.stringify(migrated));
+        localStorage.removeItem(LEGACY_KEY);
+        return migrated;
+      }
     }
   } catch {
     /* fall through to a fresh database */

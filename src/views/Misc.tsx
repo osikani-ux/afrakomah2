@@ -197,7 +197,7 @@ export function SettingsView() {
           <Card className="p-4">
             <SectionHead title="Hospital Profile" />
             <div className="space-y-1.5 text-xs">
-              {[["Facility", "MediCore General Hospital"], ["Location", "14 Independence Ave, Accra"], ["License", "GHA-HF-2214-A"], ["Beds", `${db.beds.length} across 4 wards`], ["Departments", "13 connected modules"], ["System", "MediCore HMS · on-device"]].map(([k, v]) => (
+              {[["Facility", "MediCore General Hospital"], ["Location", "14 Independence Ave, Accra"], ["License", "GHA-HF-2214-A"], ["Beds", `${db.beds.length} across ${db.wards.length} ward${db.wards.length === 1 ? "" : "s"}`], ["Departments", "13 connected modules"], ["System", "MediCore HMS · on-device"]].map(([k, v]) => (
                 <p key={k} className="flex justify-between gap-3"><span className="text-ink-faint">{k}</span><span className="font-semibold text-ink">{v}</span></p>
               ))}
             </div>
@@ -240,7 +240,7 @@ export function SettingsView() {
             <p className="mt-1 text-xs text-ink-faint">Every record and account on this device will be erased and the hospital starts empty. Download a backup first if you need one.</p>
             <div className="mt-4 flex justify-end gap-2">
               <Btn variant="ghost" onClick={() => setConfirmReset(false)}>Keep my data</Btn>
-              <Btn variant="danger" onClick={() => { localStorage.removeItem("medicore-db-v4"); localStorage.removeItem("medicore-user-v4"); location.reload(); }}>
+              <Btn variant="danger" onClick={() => { localStorage.removeItem("medicore-db-v5"); localStorage.removeItem("medicore-db-v4"); localStorage.removeItem("medicore-user-v4"); location.reload(); }}>
                 <IRefresh size={13} /> Yes, reset
               </Btn>
             </div>

@@ -1,6 +1,6 @@
 import { useStore } from "../store";
 import { invTotal, invBalance } from "../store";
-import { LAB_CATALOG, WARD_META, fmtShort, dISO, ghs } from "../data";
+import { LAB_CATALOG, fmtShort, dISO, ghs } from "../data";
 import { Badge, Btn, Card, SectionHead, AreaChart, BarsChart, Donut, HBars, downloadCSV } from "../ui";
 import { IDownload, IPrinter, IUsers, IReceipt, IFlask, IPill, IBed, ICalendar } from "../icons";
 
@@ -113,13 +113,13 @@ export default function ReportsView() {
           <div className="flex items-center gap-6">
             <Donut value={db.beds.filter((b) => b.status === "occupied").length} total={db.beds.length} label="Occupied" sub="All wards combined" />
             <div className="flex-1 space-y-1.5">
-              {Object.keys(WARD_META).map((w) => {
-                const beds = db.beds.filter((b) => b.ward === w);
+              {db.wards.map((w) => {
+                const beds = db.beds.filter((b) => b.ward === w.id);
                 const occ = beds.filter((b) => b.status === "occupied").length;
                 return (
-                  <div key={w} className="flex items-center gap-2 text-[11px]">
-                    <span className="w-28 truncate text-ink-soft">{WARD_META[w].name.split("—")[0]}</span>
-                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-line-soft"><div className="h-full rounded-full bg-med-600" style={{ width: `${(occ / beds.length) * 100}%` }} /></div>
+                  <div key={w.id} className="flex items-center gap-2 text-[11px]">
+                    <span className="w-28 truncate text-ink-soft" title={w.name}>{w.name}</span>
+                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-line-soft"><div className="h-full rounded-full bg-med-600 transition-all duration-500" style={{ width: `${beds.length ? (occ / beds.length) * 100 : 0}%` }} /></div>
                     <span className="font-mono text-[10px] text-ink-faint">{occ}/{beds.length}</span>
                   </div>
                 );
@@ -127,7 +127,7 @@ export default function ReportsView() {
             </div>
           </div>
           <div className="mt-3">
-            <Btn variant="soft" size="xs" onClick={() => exportCsv("bed-occupancy.csv", [["Ward", "Occupied", "Total", "Occupancy %"], ...Object.keys(WARD_META).map((w) => { const b = db.beds.filter((x) => x.ward === w); const o = b.filter((x) => x.status === "occupied").length; return [WARD_META[w].name, o, b.length, Math.round((o / b.length) * 100)]; })])}><IDownload size={12} /> CSV</Btn>
+            <Btn variant="soft" size="xs" onClick={() => exportCsv("bed-occupancy.csv", [["Ward", "Occupied", "Total", "Occupancy %"], ...db.wards.map((w) => { const b = db.beds.filter((x) => x.ward === w.id); const o = b.filter((x) => x.status === "occupied").length; return [w.name, o, b.length, b.length ? Math.round((o / b.length) * 100) : 0]; })])}><IDownload size={12} /> CSV</Btn>
           </div>
         </Card>
 

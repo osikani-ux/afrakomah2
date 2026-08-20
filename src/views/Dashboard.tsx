@@ -1,5 +1,5 @@
 import { useStore } from "../store";
-import { todayISO, timeAgo, fmtTime, QUEUE_DEPTS, WARD_META, ghs } from "../data";
+import { todayISO, timeAgo, fmtTime, QUEUE_DEPTS, ghs } from "../data";
 import { Badge, Card, SectionHead, StatusPill, AreaChart, BarsChart, Donut, HBars, Sparkline, EcgStrip, Btn } from "../ui";
 import { IUsers, ICalendar, IBed, IZap, IReceipt, IFlask, IPill, IAlert, IChevR, IArrowR } from "../icons";
 
@@ -39,9 +39,9 @@ export default function Dashboard() {
     .sort((a, b) => b.value - a.value)
     .slice(0, 5);
 
-  const wardOcc = Object.keys(WARD_META).map((w) => {
-    const beds = db.beds.filter((b) => b.ward === w);
-    return { w, occ: beds.filter((b) => b.status === "occupied").length, total: beds.length };
+  const wardOcc = db.wards.map((w) => {
+    const beds = db.beds.filter((b) => b.ward === w.id);
+    return { w: w.id, occ: beds.filter((b) => b.status === "occupied").length, total: beds.length };
   });
 
   const kpis = [

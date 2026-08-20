@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore, nid, charge } from "../store";
-import { WARD_META, todayISO, nowISO, fmtDate, fmtTime, ghs } from "../data";
+import { wardOf, nextBedNo, todayISO, nowISO, fmtDate, fmtTime, ghs } from "../data";
 import type { Bed, Vitals } from "../data";
 import { Badge, Btn, Card, Field, Input, Modal, Select, StatusPill, SectionHead, Textarea, Avatar } from "../ui";
-import { IBed, ICheck, IPlus, IActivity, IAlert, IChevR, IUser } from "../icons";
+import { IBed, ICheck, IPlus, IActivity, IAlert, IChevR, IUser, IX } from "../icons";
 
 const BED_STYLE: Record<Bed["status"], string> = {
   available: "border-emerald-300 bg-emerald-50/70 hover:border-emerald-500 hover:shadow-md",
@@ -18,22 +18,34 @@ const BED_DOT: Record<Bed["status"], string> = {
 
 export default function WardsView() {
   const { db, user, mutate, toast } = useStore();
-  const [ward, setWard] = useState("A");
+  const [ward, setWard] = useState(db.wards[0]?.id ?? "A");
   const [bedModal, setBedModal] = useState<Bed | null>(null);
   const [admModal, setAdmModal] = useState<Bed | null>(null);
+  const [addBedOpen, setAddBedOpen] = useState(false);
+  const [addWardOpen, setAddWardOpen] = useState(false);
+  const [armedRemove, setArmedRemove] = useState<string | null>(null);
   const [nursingFor, setNursingFor] = useState<string>(db.admissions.find((a) => a.status === "active")?.patientMrn ?? "");
 
   const role = user?.role;
   const canManage = role === "nurse" || role === "doctor" || role === "admin";
+  const canRestructure = role === "admin" || role === "nurse";
+  const wardCfg = wardOf(db.wards, ward);
   const beds = db.beds.filter((b) => b.ward === ward);
   const counts = (s: Bed["status"]) => db.beds.filter((b) => b.status === s).length;
+
+  /* auto-disarm the remove confirmation after a moment */
+  useEffect(() => {
+    if (!armedRemove) return;
+    const t = window.setTimeout(() => setArmedRemove(null), 2600);
+    return () => window.clearTimeout(t);
+  }, [armedRemove]);
 
   const markCleaned = (b: Bed) => {
     mutate(
       (d) => {
         d.beds.find((x) => x.id === b.id)!.status = "available";
       },
-      { audit: `Bed ${b.id} cleaned and released`, notify: { text: `Bed ${b.id} (${WARD_META[b.ward].name}) is now available`, icon: "bed", roles: ["admin", "nurse", "reception"] } }
+      { audit: `Bed ${b.id} cleaned and released`, notify: { text: `Bed ${b.id} (${wardOf(db.wards, b.ward).name}) is now available`, icon: "bed", roles: ["admin", "nurse", "reception"] } }
     );
     toast(`Bed ${b.id} is now available`, "ok");
   };
@@ -42,6 +54,21 @@ export default function WardsView() {
     const to = b.status === "reserved" ? "available" : "reserved";
     mutate((d) => { d.beds.find((x) => x.id === b.id)!.status = to; }, { audit: `Bed ${b.id} ${to === "reserved" ? "reserved" : "released"}` });
     toast(`Bed ${b.id} ${to === "reserved" ? "reserved for incoming admission" : "released"}`, "info");
+  };
+
+  const removeBed = (b: Bed) => {
+    const wn = wardOf(db.wards, b.ward).name;
+    mutate(
+      (d) => {
+        d.beds = d.beds.filter((x) => x.id !== b.id);
+      },
+      {
+        audit: `Removed bed ${b.id} from ${wn} — capacity now ${db.beds.length - 1}`,
+        notify: { text: `Bed ${b.id} retired from ${wn}`, icon: "bed", roles: ["admin", "nurse", "reception"] },
+      }
+    );
+    toast(`Bed ${b.id} removed from ${wn}`, "warn");
+    setArmedRemove(null);
   };
 
   return (
@@ -59,20 +86,42 @@ export default function WardsView() {
         </div>
       </div>
 
-      <div className="flex gap-1.5">
-        {Object.entries(WARD_META).map(([w, meta]) => {
-          const free = db.beds.filter((b) => b.ward === w && b.status === "available").length;
+      <div className="flex flex-wrap items-stretch gap-1.5">
+        {db.wards.map((w) => {
+          const total = db.beds.filter((b) => b.ward === w.id).length;
+          const free = db.beds.filter((b) => b.ward === w.id && b.status === "available").length;
           return (
-            <button key={w} onClick={() => setWard(w)} className={`rounded-xl border px-4 py-2.5 text-left transition-all ${ward === w ? "border-pine-800 bg-pine-900 text-white shadow-sm" : "border-line bg-white text-ink-soft hover:border-med-300"}`}>
-              <p className="text-[11px] font-bold">{meta.name}</p>
-              <p className={`font-mono text-[10px] ${ward === w ? "text-mint" : "text-ink-faint"}`}>{free} free · {ghs(meta.daily)}/night</p>
+            <button key={w.id} onClick={() => setWard(w.id)} className={`rounded-xl border px-4 py-2.5 text-left transition-all active:scale-[0.98] ${ward === w.id ? "border-pine-800 bg-pine-900 text-white shadow-md shadow-pine-900/20" : "border-line bg-white text-ink-soft hover:-translate-y-0.5 hover:border-med-300 hover:shadow-sm"}`}>
+              <p className="text-[11px] font-bold">{w.name}</p>
+              <p className={`font-mono text-[10px] ${ward === w.id ? "text-mint" : "text-ink-faint"}`}>{free}/{total} free · {ghs(w.daily)}/night</p>
             </button>
           );
         })}
+        {canRestructure && (
+          <button onClick={() => setAddWardOpen(true)} className="flex items-center gap-1.5 rounded-xl border-2 border-dashed border-line px-4 py-2.5 text-[11px] font-bold text-ink-faint transition-all hover:border-med-400 hover:text-med-700 active:scale-[0.98]">
+            <IPlus size={13} /> New ward
+          </button>
+        )}
       </div>
 
       {/* bed map */}
       <Card className="p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">
+            {wardCfg.name} · <span className="font-mono text-med-700">{beds.length} beds</span> · charge {ghs(wardCfg.daily)}/night
+          </p>
+          {canRestructure && (
+            <Btn variant="soft" size="xs" onClick={() => setAddBedOpen(true)}><IPlus size={12} /> Add bed to {wardCfg.id}</Btn>
+          )}
+        </div>
+        {beds.length === 0 && (
+          <div className="rounded-xl border-2 border-dashed border-line px-4 py-10 text-center">
+            <IBed size={22} className="mx-auto text-ink-faint" />
+            <p className="mt-2 font-display text-sm font-bold text-ink-soft">No beds in this ward yet</p>
+            <p className="mt-1 text-xs text-ink-faint">Add the first bed to start admitting patients here.</p>
+            {canRestructure && <Btn className="mt-3" onClick={() => setAddBedOpen(true)}><IPlus size={13} /> Add bed {nextBedNo(ward, db.beds)}</Btn>}
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           {beds.map((b) => {
             const p = b.patientMrn ? db.patients.find((x) => x.mrn === b.patientMrn) : null;
@@ -94,6 +143,17 @@ export default function WardsView() {
                   {b.status === "cleaning" && canManage && <Btn variant="soft" size="xs" onClick={() => markCleaned(b)}><ICheck size={11} /> Cleaned</Btn>}
                   {(b.status === "available" || b.status === "reserved") && canManage && (
                     <Btn variant="ghost" size="xs" onClick={() => toggleReserve(b)}>{b.status === "reserved" ? "Release" : "Reserve"}</Btn>
+                  )}
+                  {b.status !== "occupied" && canRestructure && (
+                    <button
+                      onClick={() => (armedRemove === b.id ? removeBed(b) : setArmedRemove(b.id))}
+                      title="Remove this bed"
+                      className={`ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-bold transition-all active:scale-95 ${
+                        armedRemove === b.id ? "blink-soft bg-alert text-white" : "text-ink-faint/70 hover:bg-red-50 hover:text-alert"
+                      }`}
+                    >
+                      <IX size={10} /> {armedRemove === b.id ? "Sure?" : ""}
+                    </button>
                   )}
                 </div>
               </div>
@@ -133,7 +193,137 @@ export default function WardsView() {
 
       {bedModal && <OccupiedModal bed={bedModal} onClose={() => setBedModal(null)} />}
       {admModal && <AdmitModal bed={admModal} onClose={() => setAdmModal(null)} />}
+      {addBedOpen && <AddBedModal wardId={ward} onClose={() => setAddBedOpen(false)} />}
+      {addWardOpen && <AddWardModal onClose={() => { setAddWardOpen(false); }} onCreated={(id) => setWard(id)} />}
     </div>
+  );
+}
+
+/* ---------------- add a bed (nurse / admin) ---------------- */
+
+function AddBedModal({ wardId, onClose }: { wardId: string; onClose: () => void }) {
+  const { db, mutate, toast } = useStore();
+  const [bedId, setBedId] = useState(nextBedNo(wardId, db.beds));
+  const [count, setCount] = useState("1");
+  const [err, setErr] = useState<string | null>(null);
+  const wn = wardOf(db.wards, wardId).name;
+
+  const save = () => {
+    const n = Math.min(20, Math.max(1, parseInt(count) || 1));
+    const ids: string[] = [];
+    let base = bedId.trim().toUpperCase();
+    if (!base || !/^[A-Z0-9]+-\d+$/.test(base)) {
+      setErr("Use the ward code + number format, e.g. A-07.");
+      return;
+    }
+    const [prefix, numStr] = base.split("-");
+    let num = parseInt(numStr, 10);
+    for (let i = 0; i < n; i++) {
+      ids.push(`${prefix}-${String(num + i).padStart(2, "0")}`);
+    }
+    const clash = ids.find((id) => db.beds.some((b) => b.id === id));
+    if (clash) {
+      setErr(`Bed ${clash} already exists — pick the next free number (${nextBedNo(wardId, db.beds)}).`);
+      return;
+    }
+    mutate(
+      (d) => {
+        ids.forEach((id) => d.beds.push({ id, ward: wardId, status: "available" }));
+      },
+      {
+        audit: `Added ${ids.length} bed(s) to ${wn}: ${ids.join(", ")} — capacity now ${db.beds.length + ids.length}`,
+        notify: { text: `${ids.length} new bed(s) available in ${wn} (${ids[0]}${ids.length > 1 ? ` +${ids.length - 1}` : ""})`, icon: "bed", roles: ["admin", "nurse", "reception"] },
+      }
+    );
+    toast(`${ids.length} bed(s) added to ${wn}`, "ok");
+    onClose();
+  };
+
+  return (
+    <Modal title={`Add beds — ${wn}`} sub="New beds open as Available and appear on the map immediately" onClose={onClose} w="max-w-sm"
+      footer={<><Btn variant="ghost" onClick={onClose}>Cancel</Btn><Btn onClick={save}><IBed size={14} /> Add bed(s)</Btn></>}>
+      <div className="space-y-3">
+        <Field label="First bed number" hint={err ?? undefined}>
+          <Input value={bedId} onChange={(e) => { setBedId(e.target.value); setErr(null); }} className="font-mono uppercase" />
+        </Field>
+        <Field label="How many beds">
+          <div className="flex items-center gap-1.5">
+            {[1, 2, 4, 6].map((c) => (
+              <button key={c} onClick={() => setCount(String(c))}
+                className={`rounded-lg border px-3.5 py-1.5 font-mono text-xs font-bold transition-all active:scale-95 ${count === String(c) ? "border-med-600 bg-med-600 text-white" : "border-line bg-white text-ink-soft hover:border-med-300"}`}>
+                {c}
+              </button>
+            ))}
+            <Input type="number" min={1} max={20} value={count} onChange={(e) => setCount(e.target.value)} className="w-20 font-mono" />
+          </div>
+        </Field>
+        <p className="rounded-lg bg-paper/70 px-3 py-2 text-[10.5px] text-ink-faint">
+          {wn} will hold <span className="font-mono font-bold text-med-700">{db.beds.filter((b) => b.ward === wardId).length + Math.min(20, Math.max(1, parseInt(count) || 1))}</span> beds
+          · nightly charge {ghs(wardOf(db.wards, wardId).daily)} applies on admission.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+/* ---------------- add a whole ward (nurse / admin) ---------------- */
+
+function AddWardModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  const { db, mutate, toast } = useStore();
+  const nextLetter = "ABCDEFGHIJ".split("").find((l) => !db.wards.some((w) => w.id === l)) ?? "W";
+  const [f, setF] = useState({ id: nextLetter, name: "", daily: "180", beds: "6" });
+  const [err, setErr] = useState<string | null>(null);
+  const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
+
+  const save = () => {
+    const id = f.id.trim().toUpperCase();
+    if (!id || !/^[A-Z0-9]{1,3}$/.test(id)) {
+      setErr("Ward code must be 1–3 letters or digits, e.g. E.");
+      return;
+    }
+    if (db.wards.some((w) => w.id === id)) {
+      setErr(`Ward ${id} already exists.`);
+      return;
+    }
+    if (!f.name.trim()) {
+      setErr("Give the ward a name, e.g. ICU.");
+      return;
+    }
+    const daily = Math.max(0, parseFloat(f.daily) || 0);
+    const n = Math.min(30, Math.max(0, parseInt(f.beds) || 0));
+    mutate(
+      (d) => {
+        d.wards.push({ id, name: f.name.trim(), daily });
+        for (let i = 1; i <= n; i++) {
+          d.beds.push({ id: `${id}-${String(i).padStart(2, "0")}`, ward: id, status: "available" });
+        }
+      },
+      {
+        audit: `Opened new ward “${f.name.trim()}” (${id}) with ${n} beds at ${ghs(daily)}/night`,
+        notify: { text: `New ward open: ${f.name.trim()} — ${n} beds available`, icon: "bed", roles: ["admin", "nurse", "reception", "doctor"] },
+      }
+    );
+    toast(`Ward “${f.name.trim()}” opened with ${n} beds`, "ok");
+    onCreated(id);
+    onClose();
+  };
+
+  return (
+    <Modal title="Open a New Ward" sub="Creates the ward and its starting bed line in one step" onClose={onClose} w="max-w-md"
+      footer={<><Btn variant="ghost" onClick={onClose}>Cancel</Btn><Btn onClick={save}><IPlus size={14} /> Open ward</Btn></>}>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Ward code *" hint={err ?? undefined}>
+          <Input value={f.id} onChange={(e) => { set("id", e.target.value); setErr(null); }} className="font-mono uppercase" maxLength={3} />
+        </Field>
+        <Field label="Ward name *"><Input value={f.name} onChange={(e) => { set("name", e.target.value); setErr(null); }} placeholder="e.g. Intensive Care" /></Field>
+        <Field label="Nightly charge (GH₵)"><Input type="number" min={0} step="0.01" value={f.daily} onChange={(e) => set("daily", e.target.value)} className="font-mono" /></Field>
+        <Field label="Starting beds"><Input type="number" min={0} max={30} value={f.beds} onChange={(e) => set("beds", e.target.value)} className="font-mono" /></Field>
+      </div>
+      <p className="mt-3 rounded-lg bg-paper/70 px-3 py-2 text-[10.5px] leading-relaxed text-ink-faint">
+        Beds will be numbered <span className="font-mono font-bold text-med-700">{f.id.trim().toUpperCase() || "?"}-01 … {f.id.trim().toUpperCase() || "?"}-{String(Math.min(30, Math.max(0, parseInt(f.beds) || 0))).padStart(2, "0")}</span>.
+        You can add or retire individual beds any time from the bed map.
+      </p>
+    </Modal>
   );
 }
 
@@ -182,7 +372,7 @@ function OccupiedModal({ bed, onClose }: { bed: Bed; onClose: () => void }) {
   };
 
   return (
-    <Modal title={`Bed ${bed.id} — ${p?.name}`} sub={`${WARD_META[bed.ward].name} · admitted ${adm ? fmtDate(adm.date) : "—"}`} onClose={onClose} w="max-w-lg"
+    <Modal title={`Bed ${bed.id} — ${p?.name}`} sub={`${wardOf(db.wards, bed.ward).name} · admitted ${adm ? fmtDate(adm.date) : "—"}`} onClose={onClose} w="max-w-lg"
       footer={<>
         <Btn variant="ghost" onClick={onClose}>Close</Btn>
         {canManage && adm && <Btn variant="danger" onClick={discharge}>Discharge patient</Btn>}
@@ -231,7 +421,7 @@ function AdmitModal({ bed, onClose }: { bed: Bed; onClose: () => void }) {
       return;
     }
     const p = db.patients.find((x) => x.mrn === patientMrn);
-    const daily = WARD_META[bed.ward].daily;
+    const daily = wardOf(db.wards, bed.ward).daily;
     mutate(
       (d) => {
         const b = d.beds.find((x) => x.id === bed.id)!;
@@ -246,7 +436,7 @@ function AdmitModal({ bed, onClose }: { bed: Bed; onClose: () => void }) {
         charge(d, patientMrn, { desc: `Ward admission deposit — ${bed.id}`, amount: 400, kind: "bed" });
       },
       {
-        audit: `Admitted ${p?.name} to bed ${bed.id} (${WARD_META[bed.ward].name})`,
+        audit: `Admitted ${p?.name} to bed ${bed.id} (${wardOf(db.wards, bed.ward).name})`,
         notify: { text: `Bed ${bed.id} now occupied — ${p?.name} admitted`, icon: "bed", roles: ["admin", "nurse", "billing"] },
       }
     );
@@ -255,7 +445,7 @@ function AdmitModal({ bed, onClose }: { bed: Bed; onClose: () => void }) {
   };
 
   return (
-    <Modal title={`Admit to Bed ${bed.id}`} sub={`${WARD_META[bed.ward].name} · ${ghs(WARD_META[bed.ward].daily)} per night · deposit GH₵ 400.00 auto-billed`} onClose={onClose} w="max-w-md"
+    <Modal title={`Admit to Bed ${bed.id}`} sub={`${wardOf(db.wards, bed.ward).name} · ${ghs(wardOf(db.wards, bed.ward).daily)} per night · deposit GH₵ 400.00 auto-billed`} onClose={onClose} w="max-w-md"
       footer={<><Btn variant="ghost" onClick={onClose}>Cancel</Btn><Btn onClick={save}><IBed size={14} /> Confirm admission</Btn></>}>
       <div className="space-y-3">
         <Field label="Patient">

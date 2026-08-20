@@ -188,6 +188,12 @@ export interface Invoice {
   status: "unpaid" | "partial" | "paid";
 }
 
+export interface WardConfig {
+  id: string;
+  name: string;
+  daily: number;
+}
+
 export interface Bed {
   id: string;
   ward: string;
@@ -283,6 +289,7 @@ export interface DB {
   medicines: Medicine[];
   inventory: InventoryItem[];
   invoices: Invoice[];
+  wards: WardConfig[];
   beds: Bed[];
   admissions: Admission[];
   emergencies: EmergencyCase[];
@@ -481,6 +488,21 @@ export const WARD_META: Record<string, { name: string; daily: number }> = {
   D: { name: "Ward D — Maternity", daily: 200 },
 };
 
+/** Resolves a ward's live config, with a graceful fallback for legacy ids. */
+export const wardOf = (wards: WardConfig[], id: string): WardConfig =>
+  wards.find((w) => w.id === id) ?? { id, name: WARD_META[id]?.name ?? `Ward ${id}`, daily: WARD_META[id]?.daily ?? 180 };
+
+/** Suggests the next free bed number in a ward, e.g. A-07. */
+export const nextBedNo = (wardId: string, beds: Bed[]) => {
+  const max = beds
+    .filter((b) => b.ward === wardId)
+    .reduce((m, b) => {
+      const n = parseInt(b.id.split("-").pop() || "0", 10);
+      return Number.isFinite(n) ? Math.max(m, n) : m;
+    }, 0);
+  return `${wardId}-${String(max + 1).padStart(2, "0")}`;
+};
+
 export const QUEUE_DEPTS = [
   { key: "consult", label: "General Consultation", prefix: "A", room: "Consultation Room 3", icon: "stetho" },
   { key: "lab", label: "Laboratory", prefix: "L", room: "Sample Room 1", icon: "flask" },
@@ -497,10 +519,16 @@ export const QUEUE_DEPTS = [
  * hospital works.
  */
 export function emptyDB(): DB {
+  const wards: WardConfig[] = (Object.keys(WARD_META) as (keyof typeof WARD_META)[]).map((w) => ({
+    id: w,
+    name: WARD_META[w].name.replace(/^Ward [A-Z] — /, ""),
+    daily: WARD_META[w].daily,
+  }));
+
   const beds: Bed[] = [];
-  (Object.keys(WARD_META) as (keyof typeof WARD_META)[]).forEach((w) => {
+  wards.forEach((w) => {
     for (let i = 1; i <= 6; i++) {
-      beds.push({ id: `${w}-${String(i).padStart(2, "0")}`, ward: w, status: "available" });
+      beds.push({ id: `${w.id}-${String(i).padStart(2, "0")}`, ward: w.id, status: "available" });
     }
   });
 
@@ -510,7 +538,7 @@ export function emptyDB(): DB {
   });
 
   return {
-    v: 4,
+    v: 5,
     patients: [],
     staff: [],
     appointments: [],
@@ -520,6 +548,7 @@ export function emptyDB(): DB {
     medicines: [],
     inventory: [],
     invoices: [],
+    wards,
     beds,
     admissions: [],
     emergencies: [],
